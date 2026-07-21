@@ -168,21 +168,24 @@ with col_left:
         
     stframe = st.empty()
     
-    # 하단 버튼부
-    btn_col, save_col = st.columns([1, 2])
-    with btn_col:
-        rec_clicked = st.button("🔴 REC", use_container_width=True, type="primary")
-        if rec_clicked:
-            if webcam_on:
-                st.session_state['countdown'] = True
-                st.session_state['countdown_start'] = time.time()
-                st.session_state['recording'] = False
-                st.session_state['recorded_data'] = []
-                st.rerun()
-            else:
-                st.warning("먼저 웹캠을 켜주세요!")
-    with save_col:
-        save_name = st.text_input("SAVE AS", value=f"motion_{int(time.time())}", label_visibility="collapsed")
+    # 하단 버튼 및 입력부
+    st.markdown("##### 💾 저장 설정")
+    input_col1, input_col2 = st.columns(2)
+    with input_col1:
+        project_name = st.text_input("프로젝트 명", value="기본 프로젝트", key="project_name_input")
+    with input_col2:
+        save_name = st.text_input("파일명 (SAVE AS)", value=f"motion_{int(time.time())}")
+        
+    rec_clicked = st.button("🔴 REC (녹화 시작)", use_container_width=True, type="primary")
+    if rec_clicked:
+        if webcam_on:
+            st.session_state['countdown'] = True
+            st.session_state['countdown_start'] = time.time()
+            st.session_state['recording'] = False
+            st.session_state['recorded_data'] = []
+            st.rerun()
+        else:
+            st.warning("먼저 웹캠을 켜주세요!")
 
 with col_right:
     st.markdown("### ▶ 재생 (Playback)")
@@ -212,7 +215,6 @@ with col_right:
                         use_container_width=True
                     )
                 with cloud_col:
-                    project_name = st.text_input("프로젝트 명", value="기본 프로젝트", key="project_name_input")
                     if st.button("☁️ DB 업로드", use_container_width=True, help="Supabase 클라우드 DB에 데이터를 저장합니다."):
                         if supabase_client is None:
                             st.error("Supabase API Key가 설정되지 않았습니다. .streamlit/secrets.toml 파일을 확인해주세요.")
