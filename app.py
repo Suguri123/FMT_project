@@ -149,9 +149,9 @@ if app_mode == "☁️ 클라우드 데이터 히스토리":
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
-import mediapipe.python.solutions.hands as mp_hands
-import mediapipe.python.solutions.holistic as mp_holistic
-import mediapipe.python.solutions.drawing_utils as mp_drawing
+mp_hands = mp.solutions.hands
+mp_holistic = mp.solutions.holistic
+mp_drawing = mp.solutions.drawing_utils
 
 # 좌/우 2단 레이아웃 (이미지 참고)
 col_left, col_right = st.columns([1, 1], gap="large")
