@@ -240,6 +240,43 @@ st.markdown("### 📊 데이터 분석 (Data View)")
 analysis_viewer = st.empty()
 
 
+# 선택된 파일이 있으면 재생 버튼을 누르지 않아도 즉시 데이터 분석 그래프를 표시합니다
+if selected_file:
+    try:
+        file_path = os.path.join(DATA_DIR, selected_file)
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+            
+        times, x_vals, y_vals = [], [], []
+        if data and len(data) > 0:
+            start_t = data[0]['time']
+            for frame in data:
+                times.append(frame['time'] - start_t)
+                hands_to_draw = frame.get('hands', [frame.get('landmarks')] if 'landmarks' in frame else [])
+                
+                lm = None
+                for hand_points in hands_to_draw:
+                    if not hand_points: continue
+                    lm = next((item for item in hand_points if item['id'] == 8), None)
+                    if lm: break
+                
+                if lm:
+                    x_vals.append(lm['x'])
+                    y_vals.append(lm['y'])
+                    
+            df = pd.DataFrame({'Time(s)': times, 'X': x_vals, 'Y': y_vals})
+            fig2 = go.Figure()
+            if not df.empty:
+                fig2.add_trace(go.Scatter(x=df['Time(s)'], y=df['X'], mode='lines', name='X 좌표', line=dict(color='#e74c3c')))
+                fig2.add_trace(go.Scatter(x=df['Time(s)'], y=df['Y'], mode='lines', name='Y 좌표', line=dict(color='#3498db')))
+            fig2.update_layout(
+                title="시간에 따른 검지 손가락(Index Finger Tip) 끝 좌표 변화", 
+                xaxis_title="시간 (초)", yaxis_title="좌표 값",
+            )
+            analysis_viewer.plotly_chart(fig2, use_container_width=True)
+    except:
+        pass
+
 # ---------------------------------------------------------
 # 동작 로직 (재생 중에는 웹캠 루프가 멈추어 충돌을 방지합니다)
 # ---------------------------------------------------------
@@ -318,34 +355,6 @@ if play_clicked and selected_file:
             
             playback_viewer.plotly_chart(fig, use_container_width=True)
             time.sleep(0.03 / speed)
-            
-        # 2. 데이터 분석 그래프 시각화 (기획서 하부 카테고리)
-        times, x_vals, y_vals = [], [], []
-        if len(data) > 0:
-            start_t = data[0]['time']
-            for frame in data:
-                times.append(frame['time'] - start_t)
-                hands_to_draw = frame.get('hands', [frame.get('landmarks')] if 'landmarks' in frame else [])
-                
-                lm = None
-                for hand_points in hands_to_draw:
-                    if not hand_points: continue
-                    lm = next((item for item in hand_points if item['id'] == 8), None)
-                    if lm: break # 첫 번째로 발견된 손의 검지 손가락 끝 사용
-                
-                if lm:
-                    x_vals.append(lm['x'])
-                    y_vals.append(lm['y'])
-                    
-            df = pd.DataFrame({'Time(s)': times, 'X': x_vals, 'Y': y_vals})
-        fig2 = go.Figure()
-        fig2.add_trace(go.Scatter(x=df['Time(s)'], y=df['X'], mode='lines', name='X 좌표', line=dict(color='#e74c3c')))
-        fig2.add_trace(go.Scatter(x=df['Time(s)'], y=df['Y'], mode='lines', name='Y 좌표', line=dict(color='#3498db')))
-        fig2.update_layout(
-            title="시간에 따른 검지 손가락(Index Finger Tip) 끝 좌표 변화", 
-            xaxis_title="시간 (초)", yaxis_title="좌표 값",
-        )
-        analysis_viewer.plotly_chart(fig2, use_container_width=True)
 
 elif webcam_on:
     stframe.info("카메라를 준비하거나 연결을 확인 중입니다... 잠시만 기다려주세요 ⏳")
