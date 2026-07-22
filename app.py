@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 import time
 import json
 import os
+import re
 from supabase import create_client, Client
 
 # 페이지 설정
@@ -166,6 +167,25 @@ if app_mode == "☁️ 클라우드 데이터 히스토리":
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
+
+def sanitize_filename(name):
+    cleaned = re.sub(r'[\\/:*?"<>|]+', '_', name.strip())
+    cleaned = re.sub(r'\s+', '_', cleaned).strip('._')
+    return cleaned or f"motion_{int(time.time())}"
+
+
+def unique_motion_path(base_name):
+    candidate = os.path.join(DATA_DIR, f"{base_name}.json")
+    if not os.path.exists(candidate):
+        return candidate
+
+    index = 2
+    while True:
+        candidate = os.path.join(DATA_DIR, f"{base_name}_{index}.json")
+        if not os.path.exists(candidate):
+            return candidate
+        index += 1
+
 mp_hands = mp.solutions.hands
 mp_holistic = mp.solutions.holistic
 mp_drawing = mp.solutions.drawing_utils
@@ -202,7 +222,8 @@ with col_left:
     with input_col1:
         project_name = st.text_input("프로젝트 명", value="기본 프로젝트", key="project_name_input")
     with input_col2:
-        save_name = st.text_input("파일명 (SAVE AS)", value=f"motion_{int(time.time())}")
+        save_name = sanitize_filename(project_name)
+        st.text_input("저장 파일명", value=f"{save_name}.json", disabled=True)
         
     rec_clicked = st.button("🔴 REC (녹화 시작)", use_container_width=True, type="primary")
     if rec_clicked:
@@ -219,12 +240,39 @@ with col_right:
     st.markdown("### ▶ 재생 (Playback)")
     
     files = sorted([f for f in os.listdir(DATA_DIR) if f.endswith(".json")], reverse=True)
+    if 'selected_file' not in st.session_state:
+        st.session_state['selected_file'] = files[0] if files else None
+    if st.session_state['selected_file'] not in files:
+        st.session_state['selected_file'] = files[0] if files else None
     
     list_col, view_col = st.columns([1, 2])
     with list_col:
-        selected_file = None
         with st.expander("저장된 모션", expanded=False):
-            selected_file = st.radio("저장된 모션", files, label_visibility="collapsed") if files else None
+            if files:
+                for motion_file in files:
+                    file_col, delete_col = st.columns([5, 1], gap="small")
+                    is_selected = motion_file == st.session_state['selected_file']
+                    with file_col:
+                        if st.button(
+                            motion_file,
+                            key=f"select_motion_{motion_file}",
+                            use_container_width=True,
+                            type="primary" if is_selected else "secondary",
+                        ):
+                            st.session_state['selected_file'] = motion_file
+                            st.rerun()
+                    with delete_col:
+                        if st.button("🗑️", key=f"delete_motion_{motion_file}", help=f"{motion_file} 삭제"):
+                            file_to_delete = os.path.abspath(os.path.join(DATA_DIR, motion_file))
+                            data_dir_abs = os.path.abspath(DATA_DIR)
+                            if os.path.commonpath([data_dir_abs, file_to_delete]) == data_dir_abs and os.path.exists(file_to_delete):
+                                os.remove(file_to_delete)
+                            remaining_files = [f for f in files if f != motion_file]
+                            st.session_state['selected_file'] = remaining_files[0] if remaining_files else None
+                            st.rerun()
+            else:
+                st.caption("저장된 모션이 없습니다.")
+        selected_file = st.session_state['selected_file']
         speed = st.selectbox("Speed", [0.5, 1.0, 2.0], index=1)
         play_clicked = st.button("▶ PLAYBACK", use_container_width=True, type="primary")
         
@@ -465,7 +513,7 @@ def build_skeleton_figure(frame_data, camera_eye):
     )
     return fig
 
-if play_clicked and selected_file:
+if play_clicked and selected_file and not webcam_on:
     file_path = os.path.join(DATA_DIR, selected_file)
     with open(file_path, 'r') as f:
         data = json.load(f)
@@ -491,8 +539,6 @@ elif selected_file and not webcam_on:
         preview_fig = build_skeleton_figure(data[0], dict(x=0, y=0, z=1.5))
         playback_viewer.plotly_chart(preview_fig, use_container_width=True, key=f"playback_preview_{selected_file}")
 elif webcam_on:
-    stframe.info("카메라를 준비하거나 연결을 확인 중입니다... 잠시만 기다려주세요 ⏳")
-    
     # 카메라 리소스를 세션 상태에 저장하여, 버튼 클릭 시 앱이 재실행되어도 카메라가 끊기지 않게 유지합니다.
     if 'camera_cap' not in st.session_state or not st.session_state['camera_cap'].isOpened():
         # Windows에서 웹캠 로딩 속도 지연(MSMF)을 피하기 위해 DirectShow(CAP_DSHOW) 백엔드를 강제 적용
@@ -506,16 +552,13 @@ elif webcam_on:
     
     frame_count = 0
     with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
-        while webcam_on: # 무한 루프
+        for _ in range(180):
             ret, frame = cap.read()
             if not ret:
                 stframe.error("웹캠에서 영상을 가져올 수 없습니다. 다른 프로그램에서 카메라를 사용 중인지 확인하세요.")
                 break
                 
             frame_count += 1
-            if frame_count % 2 != 0:
-                continue
-                
             frame = cv2.flip(frame, 1)
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = holistic.process(frame_rgb)
@@ -574,11 +617,19 @@ elif webcam_on:
                 if remains <= 0:
                     st.session_state['recording'] = False
                     if len(st.session_state['recorded_data']) > 0:
-                        filename = os.path.join(DATA_DIR, f"{save_name}.json")
+                        filename = unique_motion_path(sanitize_filename(project_name))
                         with open(filename, 'w') as f:
                             json.dump(st.session_state['recorded_data'], f)
-                            
-                        # 최신 10개 파일만 유지하고 오래된 파일은 삭제
+
+                        st.session_state['selected_file'] = os.path.basename(filename)
+                        st.session_state['webcam_on'] = False
+                        st.session_state['countdown'] = False
+                        st.session_state['recording'] = False
+
+                        if 'camera_cap' in st.session_state:
+                            st.session_state['camera_cap'].release()
+                            del st.session_state['camera_cap']
+
                         saved_files = sorted(
                             [os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR) if f.endswith(".json")],
                             key=os.path.getmtime,
@@ -589,14 +640,16 @@ elif webcam_on:
                                 os.remove(old_file)
                             except:
                                 pass
-                                
-                        # 저장 후 재실행
+
                         st.rerun()
             else:
                 is_tracking = results.pose_landmarks or results.left_hand_landmarks or results.right_hand_landmarks
                 cv2.putText(frame, "ACTIVE TRACKING" if is_tracking else "SEARCHING BODY/HAND", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", width=468)
+
+        if st.session_state.get('webcam_on', False):
+            st.rerun()
 
 # 체크박스가 해제되었을 때 카메라 리소스 반환
 if not webcam_on and 'camera_cap' in st.session_state:
