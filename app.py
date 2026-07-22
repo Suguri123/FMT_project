@@ -32,7 +32,7 @@ st.markdown("""
     
     /* 전체 페이지 상단 여백(빈 공간) 대폭 제거하여 화면을 위로 끌어올림 */
     .block-container {
-        padding-top: 2rem !important;
+        padding-top: 1rem !important;
         padding-bottom: 2rem !important;
     }
     
@@ -41,8 +41,8 @@ st.markdown("""
         font-weight: 800;
         font-size: 2.2rem;
         color: #1e272e;
-        margin-top: -30px;
-        margin-bottom: 20px;
+        margin-top: -16px;
+        margin-bottom: 8px;
         letter-spacing: 1px;
     }
     
@@ -50,8 +50,8 @@ st.markdown("""
         text-align: center;
         color: #7f8fa6;
         font-size: 1.1rem;
-        margin-top: -15px;
-        margin-bottom: 30px;
+        margin-top: -8px;
+        margin-bottom: 12px;
     }
     
     /* 패널 스타일링을 위한 CSS 힌트 적용 */
@@ -66,7 +66,23 @@ st.markdown("""
         color: #2f3640;
         border-bottom: 2px solid #f1f2f6;
         padding-bottom: 10px;
-        margin-bottom: 20px;
+        margin-bottom: 8px;
+    }
+
+    div[data-testid="stRadio"] {
+        margin-bottom: 0 !important;
+    }
+
+    div[data-testid="stTextInput"] input {
+        background-color: #ffffff !important;
+        border: 1.5px solid #9aa4b2 !important;
+        border-radius: 6px !important;
+        box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06) !important;
+    }
+
+    div[data-testid="stTextInput"] input:focus {
+        border-color: #2563eb !important;
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.18) !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -81,6 +97,8 @@ if 'recorded_data' not in st.session_state:
     st.session_state['recorded_data'] = []
 if 'start_time' not in st.session_state:
     st.session_state['start_time'] = 0
+if 'webcam_on' not in st.session_state:
+    st.session_state['webcam_on'] = False
 
 # Supabase 클라이언트 초기화
 @st.cache_resource
@@ -95,7 +113,6 @@ def init_supabase():
 supabase_client = init_supabase()
 
 app_mode = st.radio("화면 선택", ["🎥 로컬 녹화 및 재생", "☁️ 클라우드 데이터 히스토리"], horizontal=True, label_visibility="collapsed")
-st.markdown("---")
 
 if app_mode == "☁️ 클라우드 데이터 히스토리":
     st.markdown("### ☁️ 클라우드 데이터 히스토리 (프로젝트 및 날짜별 조회)")
@@ -162,7 +179,18 @@ with col_left:
     # 상단 컨트롤
     ctrl_col1, ctrl_col2 = st.columns([1, 1])
     with ctrl_col1:
-        webcam_on = st.checkbox("📷 웹캠 켜기")
+        webcam_label = "📷 웹캠 끄기" if st.session_state['webcam_on'] else "📷 웹캠 켜기"
+        webcam_type = "secondary" if st.session_state['webcam_on'] else "primary"
+        if st.button(webcam_label, use_container_width=True, type=webcam_type):
+            st.session_state['webcam_on'] = not st.session_state['webcam_on']
+            if not st.session_state['webcam_on']:
+                st.session_state['recording'] = False
+                st.session_state['countdown'] = False
+                if 'camera_cap' in st.session_state:
+                    st.session_state['camera_cap'].release()
+                    del st.session_state['camera_cap']
+            st.rerun()
+        webcam_on = st.session_state['webcam_on']
     with ctrl_col2:
         record_duration = st.slider("RECORD DURATION (s)", 1, 15, 5)
         
@@ -194,7 +222,9 @@ with col_right:
     
     list_col, view_col = st.columns([1, 2])
     with list_col:
-        selected_file = st.radio("저장된 모션", files) if files else None
+        selected_file = None
+        with st.expander("저장된 모션", expanded=False):
+            selected_file = st.radio("저장된 모션", files, label_visibility="collapsed") if files else None
         speed = st.selectbox("Speed", [0.5, 1.0, 2.0], index=1)
         play_clicked = st.button("▶ PLAYBACK", use_container_width=True, type="primary")
         
@@ -242,122 +272,224 @@ st.markdown("### 📊 데이터 분석 (Data View)")
 analysis_viewer = st.empty()
 
 
-# 선택된 파일이 있으면 재생 버튼을 누르지 않아도 즉시 데이터 분석 그래프를 표시합니다
+FINGER_JOINTS = {
+    "엄지": [1, 2, 3, 4],
+    "검지": [5, 6, 7, 8],
+    "중지": [9, 10, 11, 12],
+    "약지": [13, 14, 15, 16],
+    "소지": [17, 18, 19, 20],
+}
+
+JOINT_LABELS = {
+    1: "엄지 CMC", 2: "엄지 MCP", 3: "엄지 IP", 4: "엄지 TIP",
+    5: "검지 MCP", 6: "검지 PIP", 7: "검지 DIP", 8: "검지 TIP",
+    9: "중지 MCP", 10: "중지 PIP", 11: "중지 DIP", 12: "중지 TIP",
+    13: "약지 MCP", 14: "약지 PIP", 15: "약지 DIP", 16: "약지 TIP",
+    17: "소지 MCP", 18: "소지 PIP", 19: "소지 DIP", 20: "소지 TIP",
+}
+
+HAND_KEYS = [("왼손", "left_hand", 0), ("오른손", "right_hand", 1)]
+
+
+def get_hand_points(frame, hand_key, fallback_index):
+    hand_points = frame.get(hand_key)
+    if hand_points:
+        return hand_points
+    legacy_hands = frame.get('hands', [])
+    if fallback_index < len(legacy_hands):
+        return legacy_hands[fallback_index]
+    return []
+
+
+def build_hand_analysis_rows(data):
+    rows = []
+    if not data:
+        return rows
+
+    start_t = data[0].get('time', 0)
+    for frame in data:
+        elapsed = frame.get('time', start_t) - start_t
+        for hand_label, hand_key, fallback_index in HAND_KEYS:
+            hand_points = get_hand_points(frame, hand_key, fallback_index)
+            if not hand_points:
+                continue
+
+            landmarks = {point['id']: point for point in hand_points}
+            for finger_name, joint_ids in FINGER_JOINTS.items():
+                for joint_id in joint_ids:
+                    point = landmarks.get(joint_id)
+                    if not point:
+                        continue
+                    joint_label = JOINT_LABELS.get(joint_id, f"Landmark {joint_id}")
+                    rows.extend([
+                        {"Time(s)": elapsed, "손": hand_label, "손가락": finger_name, "마디": joint_label, "축": "X", "좌표": point['x']},
+                        {"Time(s)": elapsed, "손": hand_label, "손가락": finger_name, "마디": joint_label, "축": "Y", "좌표": point['y']},
+                        {"Time(s)": elapsed, "손": hand_label, "손가락": finger_name, "마디": joint_label, "축": "Z", "좌표": point['z']},
+                    ])
+    return rows
+
+
+# 선택된 파일이 있으면 재생 버튼을 누르지 않아도 즉시 양손/손가락/마디 좌표 분석을 표시합니다
 if selected_file:
     try:
         file_path = os.path.join(DATA_DIR, selected_file)
         with open(file_path, 'r') as f:
             data = json.load(f)
-            
-        times, x_vals, y_vals = [], [], []
-        if data and len(data) > 0:
-            start_t = data[0]['time']
-            for frame in data:
-                times.append(frame['time'] - start_t)
-                hands_to_draw = frame.get('hands', [frame.get('landmarks')] if 'landmarks' in frame else [])
-                
-                lm = None
-                for hand_points in hands_to_draw:
-                    if not hand_points: continue
-                    lm = next((item for item in hand_points if item['id'] == 8), None)
-                    if lm: break
-                
-                if lm:
-                    x_vals.append(lm['x'])
-                    y_vals.append(lm['y'])
-                    
-            df = pd.DataFrame({'Time(s)': times, 'X': x_vals, 'Y': y_vals})
-            fig2 = go.Figure()
-            if not df.empty:
-                fig2.add_trace(go.Scatter(x=df['Time(s)'], y=df['X'], mode='lines', name='X 좌표', line=dict(color='#e74c3c')))
-                fig2.add_trace(go.Scatter(x=df['Time(s)'], y=df['Y'], mode='lines', name='Y 좌표', line=dict(color='#3498db')))
-            fig2.update_layout(
-                title="시간에 따른 검지 손가락(Index Finger Tip) 끝 좌표 변화", 
-                xaxis_title="시간 (초)", yaxis_title="좌표 값",
-            )
-            analysis_viewer.plotly_chart(fig2, use_container_width=True)
-    except:
-        pass
 
+        analysis_rows = build_hand_analysis_rows(data)
+        if analysis_rows:
+            analysis_df = pd.DataFrame(analysis_rows)
+            hand_tabs = analysis_viewer.tabs(["왼손", "오른손"])
+
+            for hand_tab, hand_label in zip(hand_tabs, ["왼손", "오른손"]):
+                with hand_tab:
+                    hand_df = analysis_df[analysis_df["손"] == hand_label]
+                    if hand_df.empty:
+                        st.info(f"{hand_label} 데이터가 없습니다.")
+                        continue
+
+                    for finger_name in FINGER_JOINTS.keys():
+                        finger_df = hand_df[hand_df["손가락"] == finger_name]
+                        if finger_df.empty:
+                            continue
+
+                        with st.expander(f"{finger_name} 마디별 좌표 변화", expanded=(finger_name == "검지")):
+                            fig = go.Figure()
+                            for joint_label in finger_df["마디"].unique():
+                                joint_df = finger_df[finger_df["마디"] == joint_label]
+                                for axis in ["X", "Y", "Z"]:
+                                    axis_df = joint_df[joint_df["축"] == axis]
+                                    fig.add_trace(go.Scatter(
+                                        x=axis_df["Time(s)"],
+                                        y=axis_df["좌표"],
+                                        mode="lines",
+                                        name=f"{joint_label} {axis}"
+                                    ))
+
+                            fig.update_layout(
+                                title=f"{hand_label} {finger_name} 전체 마디 위치 변화",
+                                xaxis_title="시간 (초)",
+                                yaxis_title="정규화 좌표 값",
+                                height=360,
+                                legend=dict(orientation="h", yanchor="bottom", y=-0.45, xanchor="left", x=0),
+                                margin=dict(l=10, r=10, t=48, b=95),
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+
+            with st.expander("전체 좌표 데이터", expanded=False):
+                st.dataframe(analysis_df, use_container_width=True)
+        else:
+            analysis_viewer.info("분석할 손가락 좌표 데이터가 없습니다.")
+    except Exception as e:
+        analysis_viewer.error(f"데이터 분석 중 오류가 발생했습니다: {e}")
 # ---------------------------------------------------------
 # 동작 로직 (재생 중에는 웹캠 루프가 멈추어 충돌을 방지합니다)
 # ---------------------------------------------------------
 
+def build_skeleton_figure(frame_data, camera_eye):
+    fig = go.Figure()
+    hands_to_draw = frame_data.get('hands', [])
+    if not hands_to_draw:
+        hands_to_draw = []
+        if frame_data.get('left_hand'):
+            hands_to_draw.append(frame_data['left_hand'])
+        if frame_data.get('right_hand'):
+            hands_to_draw.append(frame_data['right_hand'])
+    if not hands_to_draw and 'landmarks' in frame_data:
+        hands_to_draw = [frame_data.get('landmarks')]
+    pose_to_draw = frame_data.get('pose', [])
+
+    if pose_to_draw:
+        x_p = [lm['x'] for lm in pose_to_draw]
+        y_p = [-lm['y'] for lm in pose_to_draw]
+        z_p = [lm['z'] for lm in pose_to_draw]
+        fig.add_trace(go.Scatter3d(
+            x=x_p, y=y_p, z=z_p, mode='markers',
+            marker=dict(size=4, color='#2ecc71')
+        ))
+
+        for start_idx, end_idx in mp_holistic.POSE_CONNECTIONS:
+            if start_idx < len(x_p) and end_idx < len(x_p):
+                fig.add_trace(go.Scatter3d(
+                    x=[x_p[start_idx], x_p[end_idx]],
+                    y=[y_p[start_idx], y_p[end_idx]],
+                    z=[z_p[start_idx], z_p[end_idx]],
+                    mode='lines', line=dict(color='#27ae60', width=3)
+                ))
+
+    for hand_points in hands_to_draw:
+        if not hand_points:
+            continue
+        x_c = [lm['x'] for lm in hand_points]
+        y_c = [-lm['y'] for lm in hand_points]
+        z_c = [lm['z'] for lm in hand_points]
+        fig.add_trace(go.Scatter3d(
+            x=x_c, y=y_c, z=z_c, mode='markers',
+            marker=dict(size=3, color='#e74c3c')
+        ))
+
+        for start_idx, end_idx in mp_hands.HAND_CONNECTIONS:
+            if start_idx < len(x_c) and end_idx < len(x_c):
+                fig.add_trace(go.Scatter3d(
+                    x=[x_c[start_idx], x_c[end_idx]],
+                    y=[y_c[start_idx], y_c[end_idx]],
+                    z=[z_c[start_idx], z_c[end_idx]],
+                    mode='lines', line=dict(color='#ecf0f1', width=2)
+                ))
+
+    if not fig.data:
+        fig.add_annotation(
+            text="표시할 손/포즈 좌표가 없습니다.",
+            x=0.5, y=0.5,
+            xref="paper", yref="paper",
+            showarrow=False,
+            font=dict(color="#ecf0f1", size=14)
+        )
+
+    fig.update_layout(
+        scene=dict(
+            camera=dict(
+                up=dict(x=0, y=1, z=0),
+                center=dict(x=0, y=0, z=0),
+                eye=camera_eye
+            ),
+            xaxis=dict(range=[0, 1], visible=False),
+            yaxis=dict(range=[-1, 0], visible=False),
+            zaxis=dict(range=[-0.2, 0.2], visible=False),
+            bgcolor="#2c3e50"
+        ),
+        height=360,
+        margin=dict(l=0, r=0, b=0, t=0),
+        showlegend=False,
+        paper_bgcolor="#2c3e50"
+    )
+    return fig
+
 if play_clicked and selected_file:
-    # 1. 애니메이션 재생
     file_path = os.path.join(DATA_DIR, selected_file)
     with open(file_path, 'r') as f:
         data = json.load(f)
-        
-    if data:
-        connections = mp_hands.HAND_CONNECTIONS
-        for frame_data in data:
-            fig = go.Figure()
-            
-            # 이전 버전 파일 호환성 처리 및 새로운 다중 손 데이터 리스트화
-            hands_to_draw = frame_data.get('hands', [frame_data.get('landmarks')] if 'landmarks' in frame_data else [])
-            pose_to_draw = frame_data.get('pose', [])
-            
-            # 팔/몸(Pose) 뼈대 그리기
-            if pose_to_draw:
-                x_p = [lm['x'] for lm in pose_to_draw]
-                y_p = [-lm['y'] for lm in pose_to_draw]
-                z_p = [lm['z'] for lm in pose_to_draw]
-                
-                fig.add_trace(go.Scatter3d(
-                    x=x_p, y=y_p, z=z_p, mode='markers',
-                    marker=dict(size=6, color='#2ecc71')
-                ))
-                
-                for connection in mp_holistic.POSE_CONNECTIONS:
-                    start_idx, end_idx = connection
-                    if start_idx < len(x_p) and end_idx < len(x_p):
-                        fig.add_trace(go.Scatter3d(
-                            x=[x_p[start_idx], x_p[end_idx]],
-                            y=[y_p[start_idx], y_p[end_idx]],
-                            z=[z_p[start_idx], z_p[end_idx]],
-                            mode='lines', line=dict(color='#27ae60', width=4)
-                        ))
-            
-            for hand_points in hands_to_draw:
-                if not hand_points: continue
-                x_c = [lm['x'] for lm in hand_points]
-                y_c = [-lm['y'] for lm in hand_points] # Y축 반전
-                z_c = [lm['z'] for lm in hand_points]
-                
-                fig.add_trace(go.Scatter3d(
-                    x=x_c, y=y_c, z=z_c, mode='markers',
-                    marker=dict(size=4, color='#e74c3c')
-                ))
-                
-                for connection in connections:
-                    start_idx, end_idx = connection
-                    fig.add_trace(go.Scatter3d(
-                        x=[x_c[start_idx], x_c[end_idx]],
-                        y=[y_c[start_idx], y_c[end_idx]],
-                        z=[z_c[start_idx], z_c[end_idx]],
-                        mode='lines', line=dict(color='#ecf0f1', width=3)
-                    ))
-                
-            fig.update_layout(
-                scene=dict(
-                    camera=dict(
-                        up=dict(x=0, y=1, z=0),
-                        center=dict(x=0, y=0, z=0),
-                        eye=dict(x=0, y=0, z=1.5) # 정면(웹캠)에서 바라보는 시점
-                    ),
-                    xaxis=dict(range=[0, 1], visible=False),
-                    yaxis=dict(range=[-1, 0], visible=False),
-                    zaxis=dict(range=[-0.2, 0.2], visible=False),
-                    bgcolor="#2c3e50"
-                ),
-                margin=dict(l=0, r=0, b=0, t=0), showlegend=False,
-                paper_bgcolor="#2c3e50"
-            )
-            
-            playback_viewer.plotly_chart(fig, use_container_width=True)
-            time.sleep(0.03 / speed)
 
+    if data:
+        camera_eye = dict(x=0, y=0, z=1.5)
+        frame_delay = 0.03 / speed
+
+        for frame_index, frame_data in enumerate(data):
+            fig = build_skeleton_figure(frame_data, camera_eye)
+            playback_viewer.plotly_chart(
+                fig,
+                use_container_width=True,
+                key=f"playback_single_{selected_file}_{frame_index}"
+            )
+            time.sleep(frame_delay)
+elif selected_file and not webcam_on:
+    file_path = os.path.join(DATA_DIR, selected_file)
+    with open(file_path, 'r') as f:
+        data = json.load(f)
+
+    if data:
+        preview_fig = build_skeleton_figure(data[0], dict(x=0, y=0, z=1.5))
+        playback_viewer.plotly_chart(preview_fig, use_container_width=True, key=f"playback_preview_{selected_file}")
 elif webcam_on:
     stframe.info("카메라를 준비하거나 연결을 확인 중입니다... 잠시만 기다려주세요 ⏳")
     
@@ -416,15 +548,21 @@ elif webcam_on:
                 if results.pose_landmarks:
                     frame_pose = [{"id": idx, "x": lm.x, "y": lm.y, "z": lm.z} for idx, lm in enumerate(results.pose_landmarks.landmark)]
                     
+                left_hand_data = []
+                right_hand_data = []
                 all_hands_data = []
                 if results.left_hand_landmarks:
-                    all_hands_data.append([{"id": idx, "x": lm.x, "y": lm.y, "z": lm.z} for idx, lm in enumerate(results.left_hand_landmarks.landmark)])
+                    left_hand_data = [{"id": idx, "x": lm.x, "y": lm.y, "z": lm.z} for idx, lm in enumerate(results.left_hand_landmarks.landmark)]
+                    all_hands_data.append(left_hand_data)
                 if results.right_hand_landmarks:
-                    all_hands_data.append([{"id": idx, "x": lm.x, "y": lm.y, "z": lm.z} for idx, lm in enumerate(results.right_hand_landmarks.landmark)])
+                    right_hand_data = [{"id": idx, "x": lm.x, "y": lm.y, "z": lm.z} for idx, lm in enumerate(results.right_hand_landmarks.landmark)]
+                    all_hands_data.append(right_hand_data)
                     
                 st.session_state['recorded_data'].append({
                     "time": time.time(),
                     "pose": frame_pose,
+                    "left_hand": left_hand_data,
+                    "right_hand": right_hand_data,
                     "hands": all_hands_data
                 })
             
@@ -458,7 +596,7 @@ elif webcam_on:
                 is_tracking = results.pose_landmarks or results.left_hand_landmarks or results.right_hand_landmarks
                 cv2.putText(frame, "ACTIVE TRACKING" if is_tracking else "SEARCHING BODY/HAND", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
-            stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", use_container_width=True)
+            stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", width=468)
 
 # 체크박스가 해제되었을 때 카메라 리소스 반환
 if not webcam_on and 'camera_cap' in st.session_state:
