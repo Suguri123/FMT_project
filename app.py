@@ -717,7 +717,7 @@ if selected_file:
 # 동작 로직 (재생 중에는 웹캠 루프가 멈추어 충돌을 방지합니다)
 # ---------------------------------------------------------
 
-def build_skeleton_figure(frame_data, camera_eye):
+def build_skeleton_figure(frame_data):
     fig = go.Figure()
     hands_to_draw = frame_data.get('hands', [])
     if not hands_to_draw:
@@ -729,29 +729,44 @@ def build_skeleton_figure(frame_data, camera_eye):
     if not hands_to_draw and 'landmarks' in frame_data:
         hands_to_draw = [frame_data.get('landmarks')]
 
-    for hand_points in hands_to_draw:
+    hand_colors = ['#ff4d4f', '#40a9ff']
+    for hand_index, hand_points in enumerate(hands_to_draw):
         if not hand_points:
             continue
+
         x_c = [lm['x'] for lm in hand_points]
-        y_c = [-lm['y'] for lm in hand_points]
-        z_c = [lm['z'] for lm in hand_points]
-        fig.add_trace(go.Scatter3d(
-            x=x_c, y=y_c, z=z_c, mode='markers',
-            marker=dict(size=3, color='#e74c3c')
-        ))
+        y_c = [1 - lm['y'] for lm in hand_points]
+        color = hand_colors[hand_index % len(hand_colors)]
+
+        line_x = []
+        line_y = []
 
         for start_idx, end_idx in mp_hands.HAND_CONNECTIONS:
             if start_idx < len(x_c) and end_idx < len(x_c):
-                fig.add_trace(go.Scatter3d(
-                    x=[x_c[start_idx], x_c[end_idx]],
-                    y=[y_c[start_idx], y_c[end_idx]],
-                    z=[z_c[start_idx], z_c[end_idx]],
-                    mode='lines', line=dict(color='#ecf0f1', width=2)
-                ))
+                line_x.extend([x_c[start_idx], x_c[end_idx], None])
+                line_y.extend([y_c[start_idx], y_c[end_idx], None])
+
+        fig.add_trace(go.Scatter(
+            x=line_x,
+            y=line_y,
+            mode='lines',
+            line=dict(color='#f5f5f5', width=4),
+            hoverinfo='skip',
+        ))
+        fig.add_trace(go.Scatter(
+            x=x_c,
+            y=y_c,
+            mode='markers+text',
+            marker=dict(size=10, color=color, line=dict(color='#111827', width=1)),
+            text=[str(index) for index in range(len(x_c))],
+            textposition='top center',
+            textfont=dict(size=9, color='#ffffff'),
+            hoverinfo='skip',
+        ))
 
     if not fig.data:
         fig.add_annotation(
-            text="표시할 손/포즈 좌표가 없습니다.",
+            text="표시할 손 좌표가 없습니다.",
             x=0.5, y=0.5,
             xref="paper", yref="paper",
             showarrow=False,
@@ -759,21 +774,13 @@ def build_skeleton_figure(frame_data, camera_eye):
         )
 
     fig.update_layout(
-        scene=dict(
-            camera=dict(
-                up=dict(x=0, y=1, z=0),
-                center=dict(x=0, y=0, z=0),
-                eye=camera_eye
-            ),
-            xaxis=dict(range=[0, 1], visible=False),
-            yaxis=dict(range=[-1, 0], visible=False),
-            zaxis=dict(range=[-0.2, 0.2], visible=False),
-            bgcolor="#2c3e50"
-        ),
-        height=360,
+        xaxis=dict(range=[0, 1], visible=False, constrain='domain'),
+        yaxis=dict(range=[0, 1], visible=False, scaleanchor='x', scaleratio=1),
+        height=420,
         margin=dict(l=0, r=0, b=0, t=0),
         showlegend=False,
-        paper_bgcolor="#2c3e50"
+        paper_bgcolor="#111827",
+        plot_bgcolor="#111827",
     )
     return fig
 
@@ -783,11 +790,10 @@ if play_clicked and selected_file and not webcam_on:
         data = json.load(f)
 
     if data:
-        camera_eye = dict(x=0, y=0, z=1.5)
-        frame_delay = 0.03 / speed
+        frame_delay = 0.02 / speed
 
         for frame_index, frame_data in enumerate(data):
-            fig = build_skeleton_figure(frame_data, camera_eye)
+            fig = build_skeleton_figure(frame_data)
             playback_viewer.plotly_chart(
                 fig,
                 width="stretch",
@@ -800,7 +806,7 @@ elif selected_file and not webcam_on:
         data = json.load(f)
 
     if data:
-        preview_fig = build_skeleton_figure(data[0], dict(x=0, y=0, z=1.5))
+        preview_fig = build_skeleton_figure(data[0])
         playback_viewer.plotly_chart(preview_fig, width="stretch", key=f"playback_preview_{selected_file}")
 
 if webcam_on:
