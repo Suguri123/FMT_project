@@ -104,18 +104,23 @@ def init_supabase():
     try:
         url = st.secrets["SUPABASE_URL"]
         key = st.secrets["SUPABASE_KEY"]
-        return create_client(url, key)
+        return create_client(url, key), None
     except Exception as e:
-        return None
+        return None, str(e)
 
-supabase_client = init_supabase()
+supabase_client, supabase_init_error = init_supabase()
 
 app_mode = st.radio("화면 선택", ["🎥 로컬 녹화 및 재생", "☁️ 클라우드 데이터 히스토리"], horizontal=True, label_visibility="collapsed")
 
 if app_mode == "☁️ 클라우드 데이터 히스토리":
     st.markdown("### ☁️ 클라우드 데이터 히스토리 (프로젝트 및 날짜별 조회)")
     if supabase_client is None:
-        st.error("Supabase API Key가 설정되지 않았습니다.")
+        st.error(
+            "Supabase 연결 설정이 없습니다. Streamlit Cloud의 App settings > Secrets에 "
+            "SUPABASE_URL, SUPABASE_KEY를 추가해야 합니다."
+        )
+        if supabase_init_error:
+            st.caption(f"초기화 오류: {supabase_init_error}")
     else:
         try:
             # 전체 데이터 가져오기 (시간 순 정렬)
@@ -357,7 +362,12 @@ with col_right:
                 with cloud_col:
                     if st.button("☁️ DB 업로드", width="stretch", help="Supabase 클라우드 DB에 데이터를 저장합니다."):
                         if supabase_client is None:
-                            st.error("Supabase API Key가 설정되지 않았습니다. .streamlit/secrets.toml 파일을 확인해주세요.")
+                            st.error(
+                                "Supabase 연결 설정이 없습니다. Streamlit Cloud의 App settings > Secrets에 "
+                                "SUPABASE_URL, SUPABASE_KEY를 추가해야 합니다."
+                            )
+                            if supabase_init_error:
+                                st.caption(f"초기화 오류: {supabase_init_error}")
                         else:
                             try:
                                 # json_data(문자열)를 파이썬 딕셔너리 리스트로 변환하여 업로드
@@ -367,6 +377,10 @@ with col_right:
                                 st.balloons()
                             except Exception as e:
                                 st.error(f"업로드 실패: {e}")
+                                st.caption(
+                                    "Secrets가 맞다면 Supabase의 motions 테이블 컬럼과 RLS/insert 정책을 확인하세요. "
+                                    "필요 컬럼: filename, data, project_name, created_at"
+                                )
             except:
                 pass
                 
