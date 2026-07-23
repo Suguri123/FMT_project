@@ -105,6 +105,20 @@ class MotionCaptureSession:
             if not enabled or port_changed:
                 self._close_arduino()
 
+    def send_arduino_command(self, port: str, command: str) -> None:
+        port = (port or 'COM3').strip()
+        command = command.strip().upper()
+        if command not in {'ON', 'OFF'}:
+            raise ValueError('Arduino command must be ON or OFF.')
+
+        with self._processor_lock:
+            with self._state_lock:
+                if port != self._arduino_port:
+                    self._arduino_port = port
+                    self._close_arduino()
+
+            self._write_arduino_command(command, time.time(), '전송 완료')
+
     def take_completed_filename(self) -> str | None:
         with self._state_lock:
             filename = self._completed_filename
@@ -217,6 +231,16 @@ class MotionCaptureSession:
             except Exception:
                 pass
 
+    def _write_arduino_command(self, command: str, now: float, status_suffix: str) -> None:
+        arduino = self._get_arduino()
+        arduino.write(f'{command}\n'.encode('ascii'))
+        arduino.flush()
+        with self._state_lock:
+            self._arduino_last_command = command
+            self._arduino_last_sent_at = now
+            self._arduino_error = None
+            self._arduino_status = f'{self._arduino_port}로 {command} {status_suffix}'
+
     def _draw_landmarks(self, image, results) -> None:
         for landmarks in results.multi_hand_landmarks or []:
             self._mp_drawing.draw_landmarks(
@@ -317,14 +341,7 @@ class MotionCaptureSession:
             return
 
         try:
-            arduino = self._get_arduino()
-            arduino.write(f'{command}\n'.encode('ascii'))
-            arduino.flush()
-            self._arduino_last_command = command
-            self._arduino_last_sent_at = now
-            with self._state_lock:
-                self._arduino_error = None
-                self._arduino_status = f'{self._arduino_port}로 {command} 전송 중'
+            self._write_arduino_command(command, now, '실시간 전송 중')
         except Exception as exc:
             self._close_arduino()
             with self._state_lock:

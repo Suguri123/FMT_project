@@ -10,15 +10,9 @@ from collections import Counter
 from supabase import create_client
 from streamlit_webrtc import webrtc_streamer
 
-try:
-    import serial
-except ImportError:
-    serial = None
-
 from motion_capture import MotionCaptureSession
 
 ARDUINO_DEFAULT_PORT = "COM3"
-ARDUINO_BAUD_RATE = 9600
 LEFT_FIST_THRESHOLD = 0.60
 
 # 페이지 설정
@@ -547,16 +541,6 @@ def build_left_fist_arduino_signal(data):
     }
 
 
-def send_arduino_command(port, command):
-    if serial is None:
-        raise RuntimeError("pyserial이 설치되어 있지 않습니다. pip install pyserial을 실행하세요.")
-
-    with serial.Serial(port, ARDUINO_BAUD_RATE, timeout=2) as board:
-        time.sleep(2)
-        board.write(f"{command}\n".encode("ascii"))
-        board.flush()
-
-
 def build_hand_analysis_rows(data):
     rows = []
     if not data:
@@ -618,7 +602,7 @@ if selected_file:
                         icon=":material/memory:",
                     ):
                         try:
-                            send_arduino_command(arduino_port, arduino_signal["command"])
+                            motion_capture.send_arduino_command(arduino_port, arduino_signal["command"])
                             st.success(f"{arduino_port}로 {arduino_signal['command']} 신호를 보냈습니다.")
                         except Exception as e:
                             st.error(f"Arduino 전송 실패: {e}")
