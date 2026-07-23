@@ -147,7 +147,7 @@ class MotionCaptureSession:
                     static_image_mode=False,
                     min_detection_confidence=0.5,
                     min_tracking_confidence=0.5,
-                    model_complexity=0,
+                    model_complexity=1,
                     smooth_landmarks=False,
                     enable_segmentation=False,
                     refine_face_landmarks=False,
