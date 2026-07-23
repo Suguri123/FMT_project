@@ -10,6 +10,11 @@ from collections import Counter
 from supabase import create_client
 from streamlit_webrtc import webrtc_streamer
 
+try:
+    import serial
+except ImportError:
+    serial = None
+
 from motion_capture import MotionCaptureSession
 
 # 페이지 설정
@@ -354,6 +359,9 @@ JOINT_LABELS = {
 }
 
 HAND_KEYS = [("왼손", "left_hand", 0), ("오른손", "right_hand", 1)]
+ARDUINO_DEFAULT_PORT = "COM3"
+ARDUINO_BAUD_RATE = 9600
+LEFT_FIST_THRESHOLD = 0.60
 
 FIST_FINGER_IDS = {
     "검지": {"mcp": 5, "pip": 6, "tip": 8},
@@ -428,28 +436,41 @@ def describe_hand_shape(hand_points):
     }
 
 
+def calculate_hand_shape_stats(data, hand_key, fallback_index):
+    shape_counts = Counter()
+    folded_counts = Counter()
+    detected_frames = 0
+
+    for frame in data:
+        hand_points = get_hand_points(frame, hand_key, fallback_index)
+        if not hand_points:
+            continue
+
+        shape_info = describe_hand_shape(hand_points)
+        if not shape_info:
+            continue
+
+        detected_frames += 1
+        shape_counts[shape_info["shape"]] += 1
+        folded_counts.update(shape_info["folded"])
+
+    return {
+        "detected_frames": detected_frames,
+        "shape_counts": shape_counts,
+        "folded_counts": folded_counts,
+    }
+
+
 def build_motion_shape_summary(data):
     summaries = []
     if not data:
         return summaries
 
     for hand_label, hand_key, fallback_index in HAND_KEYS:
-        shape_counts = Counter()
-        folded_counts = Counter()
-        detected_frames = 0
-
-        for frame in data:
-            hand_points = get_hand_points(frame, hand_key, fallback_index)
-            if not hand_points:
-                continue
-
-            shape_info = describe_hand_shape(hand_points)
-            if not shape_info:
-                continue
-
-            detected_frames += 1
-            shape_counts[shape_info["shape"]] += 1
-            folded_counts.update(shape_info["folded"])
+        stats = calculate_hand_shape_stats(data, hand_key, fallback_index)
+        detected_frames = stats["detected_frames"]
+        shape_counts = stats["shape_counts"]
+        folded_counts = stats["folded_counts"]
 
         if not detected_frames:
             summaries.append(f"{hand_label}: 손 좌표가 감지되지 않았습니다.")
@@ -467,6 +488,41 @@ def build_motion_shape_summary(data):
         )
 
     return summaries
+
+
+def build_left_fist_arduino_signal(data):
+    stats = calculate_hand_shape_stats(data, "left_hand", 0)
+    detected_frames = stats["detected_frames"]
+    if not detected_frames:
+        return {
+            "command": "OFF",
+            "is_fist": False,
+            "ratio": 0.0,
+            "message": "왼손 좌표가 없어 OFF 신호를 보냅니다.",
+        }
+
+    fist_ratio = stats["shape_counts"]["주먹"] / detected_frames
+    is_fist = fist_ratio >= LEFT_FIST_THRESHOLD
+    command = "ON" if is_fist else "OFF"
+    return {
+        "command": command,
+        "is_fist": is_fist,
+        "ratio": fist_ratio,
+        "message": (
+            f"왼손 주먹 비율 {fist_ratio:.0%}: "
+            f"Arduino에 {command} 신호를 보냅니다."
+        ),
+    }
+
+
+def send_arduino_command(port, command):
+    if serial is None:
+        raise RuntimeError("pyserial이 설치되어 있지 않습니다. pip install pyserial을 실행하세요.")
+
+    with serial.Serial(port, ARDUINO_BAUD_RATE, timeout=2) as board:
+        time.sleep(2)
+        board.write(f"{command}\n".encode("ascii"))
+        board.flush()
 
 
 def build_hand_analysis_rows(data):
@@ -513,6 +569,27 @@ if selected_file:
                     st.markdown("#### 저장된 모션 형상")
                     for summary in shape_summaries:
                         st.write(summary)
+
+                with st.container(border=True):
+                    st.markdown("#### Arduino LED 제어")
+                    arduino_signal = build_left_fist_arduino_signal(data)
+                    st.write(arduino_signal["message"])
+                    arduino_port = st.text_input(
+                        "Arduino 포트",
+                        value=ARDUINO_DEFAULT_PORT,
+                        key=f"arduino_port_{selected_file}",
+                    )
+
+                    if st.button(
+                        "왼손 주먹 결과를 Arduino로 전송",
+                        key=f"send_arduino_{selected_file}",
+                        icon=":material/memory:",
+                    ):
+                        try:
+                            send_arduino_command(arduino_port, arduino_signal["command"])
+                            st.success(f"{arduino_port}로 {arduino_signal['command']} 신호를 보냈습니다.")
+                        except Exception as e:
+                            st.error(f"Arduino 전송 실패: {e}")
 
                 hand_tabs = st.tabs(["왼손", "오른손"])
 
