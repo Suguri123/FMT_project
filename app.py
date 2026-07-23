@@ -6,6 +6,7 @@ import time
 import json
 import os
 import re
+from collections import Counter
 from supabase import create_client
 from streamlit_webrtc import webrtc_streamer
 
@@ -355,6 +356,13 @@ JOINT_LABELS = {
 
 HAND_KEYS = [("왼손", "left_hand", 0), ("오른손", "right_hand", 1)]
 
+FIST_FINGER_IDS = {
+    "검지": {"mcp": 5, "pip": 6, "tip": 8},
+    "중지": {"mcp": 9, "pip": 10, "tip": 12},
+    "약지": {"mcp": 13, "pip": 14, "tip": 16},
+    "소지": {"mcp": 17, "pip": 18, "tip": 20},
+}
+
 
 def get_hand_points(frame, hand_key, fallback_index):
     hand_points = frame.get(hand_key)
@@ -364,6 +372,102 @@ def get_hand_points(frame, hand_key, fallback_index):
     if fallback_index < len(legacy_hands):
         return legacy_hands[fallback_index]
     return []
+
+
+def landmark_distance(first, second):
+    return (
+        (first['x'] - second['x']) ** 2
+        + (first['y'] - second['y']) ** 2
+        + (first['z'] - second['z']) ** 2
+    ) ** 0.5
+
+
+def describe_hand_shape(hand_points):
+    landmarks = {point['id']: point for point in hand_points}
+    wrist = landmarks.get(0)
+    middle_mcp = landmarks.get(9)
+    if not wrist or not middle_mcp:
+        return None
+
+    palm_size = landmark_distance(wrist, middle_mcp)
+    if palm_size <= 0:
+        return None
+
+    folded_fingers = []
+    extended_fingers = []
+    for finger_name, ids in FIST_FINGER_IDS.items():
+        mcp = landmarks.get(ids["mcp"])
+        pip = landmarks.get(ids["pip"])
+        tip = landmarks.get(ids["tip"])
+        if not mcp or not pip or not tip:
+            continue
+
+        tip_to_wrist = landmark_distance(tip, wrist)
+        pip_to_wrist = landmark_distance(pip, wrist)
+        tip_to_mcp = landmark_distance(tip, mcp)
+        folded = tip_to_wrist < palm_size * 1.35 or tip_to_wrist <= pip_to_wrist * 1.08
+        compact = tip_to_mcp < palm_size * 0.95
+
+        if folded or compact:
+            folded_fingers.append(finger_name)
+        else:
+            extended_fingers.append(finger_name)
+
+    if len(folded_fingers) >= 4:
+        shape = "주먹"
+    elif len(folded_fingers) >= 2:
+        shape = "부분적으로 접힌 손"
+    elif len(extended_fingers) >= 3:
+        shape = "펴진 손"
+    else:
+        shape = "판정 어려움"
+
+    return {
+        "shape": shape,
+        "folded": folded_fingers,
+        "extended": extended_fingers,
+    }
+
+
+def build_motion_shape_summary(data):
+    summaries = []
+    if not data:
+        return summaries
+
+    for hand_label, hand_key, fallback_index in HAND_KEYS:
+        shape_counts = Counter()
+        folded_counts = Counter()
+        detected_frames = 0
+
+        for frame in data:
+            hand_points = get_hand_points(frame, hand_key, fallback_index)
+            if not hand_points:
+                continue
+
+            shape_info = describe_hand_shape(hand_points)
+            if not shape_info:
+                continue
+
+            detected_frames += 1
+            shape_counts[shape_info["shape"]] += 1
+            folded_counts.update(shape_info["folded"])
+
+        if not detected_frames:
+            summaries.append(f"{hand_label}: 손 좌표가 감지되지 않았습니다.")
+            continue
+
+        main_shape, main_count = shape_counts.most_common(1)[0]
+        fist_ratio = shape_counts["주먹"] / detected_frames
+        folded_text = ", ".join(
+            finger for finger, _ in folded_counts.most_common()
+        ) or "없음"
+        summaries.append(
+            f"{hand_label}: {main_shape}으로 보입니다. "
+            f"주먹 판정 비율 {fist_ratio:.0%}, 분석 프레임 {detected_frames}개, "
+            f"자주 접힌 손가락: {folded_text}"
+        )
+
+    return summaries
 
 
 def build_hand_analysis_rows(data):
@@ -404,45 +508,52 @@ if selected_file:
         analysis_rows = build_hand_analysis_rows(data)
         if analysis_rows:
             analysis_df = pd.DataFrame(analysis_rows)
-            hand_tabs = analysis_viewer.tabs(["왼손", "오른손"])
+            with analysis_viewer.container():
+                shape_summaries = build_motion_shape_summary(data)
+                if shape_summaries:
+                    st.markdown("#### 저장된 모션 형상")
+                    for summary in shape_summaries:
+                        st.write(summary)
 
-            for hand_tab, hand_label in zip(hand_tabs, ["왼손", "오른손"]):
-                with hand_tab:
-                    hand_df = analysis_df[analysis_df["손"] == hand_label]
-                    if hand_df.empty:
-                        st.info(f"{hand_label} 데이터가 없습니다.")
-                        continue
+                hand_tabs = st.tabs(["왼손", "오른손"])
 
-                    for finger_name in FINGER_JOINTS.keys():
-                        finger_df = hand_df[hand_df["손가락"] == finger_name]
-                        if finger_df.empty:
+                for hand_tab, hand_label in zip(hand_tabs, ["왼손", "오른손"]):
+                    with hand_tab:
+                        hand_df = analysis_df[analysis_df["손"] == hand_label]
+                        if hand_df.empty:
+                            st.info(f"{hand_label} 데이터가 없습니다.")
                             continue
 
-                        with st.expander(f"{finger_name} 마디별 좌표 변화", expanded=(finger_name == "검지")):
-                            fig = go.Figure()
-                            for joint_label in finger_df["마디"].unique():
-                                joint_df = finger_df[finger_df["마디"] == joint_label]
-                                for axis in ["X", "Y", "Z"]:
-                                    axis_df = joint_df[joint_df["축"] == axis]
-                                    fig.add_trace(go.Scatter(
-                                        x=axis_df["Time(s)"],
-                                        y=axis_df["좌표"],
-                                        mode="lines",
-                                        name=f"{joint_label} {axis}"
-                                    ))
+                        for finger_name in FINGER_JOINTS.keys():
+                            finger_df = hand_df[hand_df["손가락"] == finger_name]
+                            if finger_df.empty:
+                                continue
 
-                            fig.update_layout(
-                                title=f"{hand_label} {finger_name} 전체 마디 위치 변화",
-                                xaxis_title="시간 (초)",
-                                yaxis_title="정규화 좌표 값",
-                                height=360,
-                                legend=dict(orientation="h", yanchor="bottom", y=-0.45, xanchor="left", x=0),
-                                margin=dict(l=10, r=10, t=48, b=95),
-                            )
-                            st.plotly_chart(fig, width="stretch")
+                            with st.expander(f"{finger_name} 마디별 좌표 변화", expanded=(finger_name == "검지")):
+                                fig = go.Figure()
+                                for joint_label in finger_df["마디"].unique():
+                                    joint_df = finger_df[finger_df["마디"] == joint_label]
+                                    for axis in ["X", "Y", "Z"]:
+                                        axis_df = joint_df[joint_df["축"] == axis]
+                                        fig.add_trace(go.Scatter(
+                                            x=axis_df["Time(s)"],
+                                            y=axis_df["좌표"],
+                                            mode="lines",
+                                            name=f"{joint_label} {axis}"
+                                        ))
 
-            with st.expander("전체 좌표 데이터", expanded=False):
-                st.dataframe(analysis_df, width="stretch")
+                                fig.update_layout(
+                                    title=f"{hand_label} {finger_name} 전체 마디 위치 변화",
+                                    xaxis_title="시간 (초)",
+                                    yaxis_title="정규화 좌표 값",
+                                    height=360,
+                                    legend=dict(orientation="h", yanchor="bottom", y=-0.45, xanchor="left", x=0),
+                                    margin=dict(l=10, r=10, t=48, b=95),
+                                )
+                                st.plotly_chart(fig, width="stretch")
+
+                with st.expander("전체 좌표 데이터", expanded=False):
+                    st.dataframe(analysis_df, width="stretch")
         else:
             analysis_viewer.info("분석할 손가락 좌표 데이터가 없습니다.")
     except Exception as e:
