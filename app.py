@@ -217,7 +217,12 @@ with col_left:
             "controls": False,
             "muted": True,
             "playsInline": True,
-            "style": {"width": "100%"},
+            "style": {
+                "width": "50%",
+                "height": "auto",
+                "display": "block",
+                "margin": "0 auto",
+            },
         },
         translations={
             "start": "웹캠 켜기",
