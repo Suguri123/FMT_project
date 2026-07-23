@@ -277,6 +277,7 @@ with col_left:
         )
         if realtime_clicked:
             st.session_state['arduino_realtime_enabled'] = not st.session_state['arduino_realtime_enabled']
+            st.rerun()
 
         if not webcam_on:
             st.session_state['arduino_realtime_enabled'] = False
