@@ -541,6 +541,48 @@ def build_left_fist_arduino_signal(data):
     }
 
 
+def get_left_hand_command_for_frame(frame):
+    hand_points = get_hand_points(frame, "left_hand", 0)
+    if not hand_points:
+        return "OFF", "왼손 감지 안 됨"
+
+    shape_info = describe_hand_shape(hand_points)
+    if not shape_info:
+        return "OFF", "판정 어려움"
+
+    command = "ON" if shape_info["shape"] == "주먹" else "OFF"
+    return command, shape_info["shape"]
+
+
+def send_saved_motion_to_arduino(data, port, playback_speed, status_box, progress_box):
+    if not data:
+        raise ValueError("전송할 저장 데이터가 없습니다.")
+
+    start_t = data[0].get('time', 0)
+    previous_t = start_t
+    last_command = None
+
+    for frame_index, frame in enumerate(data):
+        current_t = frame.get('time', previous_t)
+        if frame_index > 0:
+            delay = max(0.0, current_t - previous_t) / max(float(playback_speed), 0.1)
+            time.sleep(delay)
+
+        command, shape = get_left_hand_command_for_frame(frame)
+        if command != last_command:
+            motion_capture.send_arduino_command(port, command)
+            last_command = command
+
+        elapsed = current_t - start_t
+        progress_box.progress((frame_index + 1) / len(data))
+        status_box.info(
+            f"저장 데이터 전송 중 · {elapsed:.1f}s · 왼손 {shape} · LED {command}"
+        )
+        previous_t = current_t
+
+    status_box.success(f"저장 데이터 전송 완료 · 마지막 신호 {last_command or 'OFF'}")
+
+
 def build_hand_analysis_rows(data):
     rows = []
     if not data:
@@ -606,6 +648,27 @@ if selected_file:
                             st.success(f"{arduino_port}로 {arduino_signal['command']} 신호를 보냈습니다.")
                         except Exception as e:
                             st.error(f"Arduino 전송 실패: {e}")
+
+                    if st.button(
+                        "저장 데이터 시간 순서대로 Arduino 전송",
+                        key=f"send_arduino_sequence_{selected_file}",
+                        icon=":material/timeline:",
+                        width="stretch",
+                    ):
+                        st.session_state['arduino_realtime_enabled'] = False
+                        motion_capture.configure_arduino_realtime(False, arduino_port)
+                        sequence_status = st.empty()
+                        sequence_progress = st.empty()
+                        try:
+                            send_saved_motion_to_arduino(
+                                data,
+                                arduino_port,
+                                speed,
+                                sequence_status,
+                                sequence_progress,
+                            )
+                        except Exception as e:
+                            sequence_status.error(f"저장 데이터 Arduino 전송 실패: {e}")
 
                 hand_tabs = st.tabs(["왼손", "오른손"])
 
