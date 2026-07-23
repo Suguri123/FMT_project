@@ -1,5 +1,7 @@
 import streamlit as st
 import mediapipe as mp
+import cv2
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import time
@@ -326,7 +328,15 @@ with col_right:
                 st.caption("저장된 모션이 없습니다.")
         selected_file = st.session_state['selected_file']
         speed = st.selectbox("Speed", [0.5, 1.0, 2.0], index=1)
-        play_clicked = st.button("▶ PLAYBACK", width="stretch", type="primary")
+        play_clicked = st.button(
+            "▶ PLAYBACK",
+            width="stretch",
+            type="primary",
+            disabled=webcam_on,
+            help="웹캠이 켜져 있으면 먼저 웹캠을 꺼주세요.",
+        )
+        if webcam_on:
+            st.caption("재생하려면 웹캠을 먼저 꺼주세요.")
         
         # 다운로드 및 클라우드 업로드 버튼
         if selected_file:
@@ -362,7 +372,7 @@ with col_right:
                 
     with view_col:
         playback_viewer = st.empty()
-        st.caption("※ 3D 아바타 렌더링 대신 데이터 정확도 검증을 위한 **뼈대(Skeleton) 시각화** 모드입니다.")
+        st.caption("※ 저장된 손 좌표를 빠른 **2D 뼈대(Skeleton) 시각화**로 재생합니다.")
         
     if not files:
         st.info("저장된 데이터 파일이 없습니다. 왼쪽 패널에서 녹화를 먼저 진행해주세요.")
@@ -681,8 +691,8 @@ if selected_file:
 # 동작 로직 (재생 중에는 웹캠 루프가 멈추어 충돌을 방지합니다)
 # ---------------------------------------------------------
 
-def build_skeleton_figure(frame_data):
-    fig = go.Figure()
+def build_skeleton_image(frame_data, width=640, height=480):
+    image = np.full((height, width, 3), (17, 24, 39), dtype=np.uint8)
     hands_to_draw = frame_data.get('hands', [])
     if not hands_to_draw:
         hands_to_draw = []
@@ -693,60 +703,52 @@ def build_skeleton_figure(frame_data):
     if not hands_to_draw and 'landmarks' in frame_data:
         hands_to_draw = [frame_data.get('landmarks')]
 
-    hand_colors = ['#ff4d4f', '#40a9ff']
+    hand_colors = [(79, 77, 255), (255, 169, 64)]
+    visible_hands = 0
     for hand_index, hand_points in enumerate(hands_to_draw):
         if not hand_points:
             continue
+        visible_hands += 1
 
-        x_c = [lm['x'] for lm in hand_points]
-        y_c = [1 - lm['y'] for lm in hand_points]
+        points = []
+        for lm in hand_points:
+            x_pos = int(min(max(lm['x'], 0.0), 1.0) * (width - 1))
+            y_pos = int(min(max(lm['y'], 0.0), 1.0) * (height - 1))
+            points.append((x_pos, y_pos))
+
         color = hand_colors[hand_index % len(hand_colors)]
 
-        line_x = []
-        line_y = []
-
         for start_idx, end_idx in mp_hands.HAND_CONNECTIONS:
-            if start_idx < len(x_c) and end_idx < len(x_c):
-                line_x.extend([x_c[start_idx], x_c[end_idx], None])
-                line_y.extend([y_c[start_idx], y_c[end_idx], None])
+            if start_idx < len(points) and end_idx < len(points):
+                cv2.line(image, points[start_idx], points[end_idx], (245, 245, 245), 4, cv2.LINE_AA)
 
-        fig.add_trace(go.Scatter(
-            x=line_x,
-            y=line_y,
-            mode='lines',
-            line=dict(color='#f5f5f5', width=4),
-            hoverinfo='skip',
-        ))
-        fig.add_trace(go.Scatter(
-            x=x_c,
-            y=y_c,
-            mode='markers+text',
-            marker=dict(size=10, color=color, line=dict(color='#111827', width=1)),
-            text=[str(index) for index in range(len(x_c))],
-            textposition='top center',
-            textfont=dict(size=9, color='#ffffff'),
-            hoverinfo='skip',
-        ))
+        for point_index, point in enumerate(points):
+            cv2.circle(image, point, 7, color, -1, cv2.LINE_AA)
+            cv2.circle(image, point, 8, (17, 24, 39), 1, cv2.LINE_AA)
+            cv2.putText(
+                image,
+                str(point_index),
+                (point[0] + 7, point[1] - 7),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
 
-    if not fig.data:
-        fig.add_annotation(
-            text="표시할 손 좌표가 없습니다.",
-            x=0.5, y=0.5,
-            xref="paper", yref="paper",
-            showarrow=False,
-            font=dict(color="#ecf0f1", size=14)
+    if not visible_hands:
+        cv2.putText(
+            image,
+            'No hand landmarks',
+            (190, 240),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (236, 240, 241),
+            2,
+            cv2.LINE_AA,
         )
 
-    fig.update_layout(
-        xaxis=dict(range=[0, 1], visible=False, constrain='domain'),
-        yaxis=dict(range=[0, 1], visible=False, scaleanchor='x', scaleratio=1),
-        height=420,
-        margin=dict(l=0, r=0, b=0, t=0),
-        showlegend=False,
-        paper_bgcolor="#111827",
-        plot_bgcolor="#111827",
-    )
-    return fig
+    return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
 if play_clicked and selected_file and not webcam_on:
     file_path = os.path.join(DATA_DIR, selected_file)
@@ -754,24 +756,29 @@ if play_clicked and selected_file and not webcam_on:
         data = json.load(f)
 
     if data:
-        frame_delay = 0.02 / speed
+        previous_t = data[0].get('time', 0)
 
         for frame_index, frame_data in enumerate(data):
-            fig = build_skeleton_figure(frame_data)
-            playback_viewer.plotly_chart(
-                fig,
+            current_t = frame_data.get('time', previous_t)
+            if frame_index > 0:
+                delay = max(0.03, current_t - previous_t) / max(float(speed), 0.1)
+                time.sleep(min(delay, 0.2))
+
+            frame_image = build_skeleton_image(frame_data)
+            playback_viewer.image(
+                frame_image,
                 width="stretch",
-                key=f"playback_single_{selected_file}_{frame_index}"
+                caption=f"{selected_file} · frame {frame_index + 1}/{len(data)}",
             )
-            time.sleep(frame_delay)
+            previous_t = current_t
 elif selected_file and not webcam_on:
     file_path = os.path.join(DATA_DIR, selected_file)
     with open(file_path, 'r') as f:
         data = json.load(f)
 
     if data:
-        preview_fig = build_skeleton_figure(data[0])
-        playback_viewer.plotly_chart(preview_fig, width="stretch", key=f"playback_preview_{selected_file}")
+        preview_image = build_skeleton_image(data[0])
+        playback_viewer.image(preview_image, width="stretch", caption=f"{selected_file} · preview")
 
 if webcam_on:
     while webrtc_ctx.state.playing:
