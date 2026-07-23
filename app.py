@@ -1,14 +1,15 @@
 import streamlit as st
-import cv2
 import mediapipe as mp
-import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import time
 import json
 import os
 import re
-from supabase import create_client, Client
+from supabase import create_client
+from streamlit_webrtc import webrtc_streamer
+
+from motion_capture import MotionCaptureSession
 
 # 페이지 설정
 st.set_page_config(page_title="FINGER MOTION TRACKER", layout="wide", initial_sidebar_state="collapsed")
@@ -91,16 +92,6 @@ st.markdown("""
 st.markdown("<div class='main-header'>FINGER MOTION TRACKER</div>", unsafe_allow_html=True)
 st.markdown("<div class='sub-header'>정밀 뼈대(Skeleton) 모션 추출 및 검증용 MVP</div>", unsafe_allow_html=True)
 
-# 세션 상태 초기화
-if 'recording' not in st.session_state:
-    st.session_state['recording'] = False
-if 'recorded_data' not in st.session_state:
-    st.session_state['recorded_data'] = []
-if 'start_time' not in st.session_state:
-    st.session_state['start_time'] = 0
-if 'webcam_on' not in st.session_state:
-    st.session_state['webcam_on'] = False
-
 # Supabase 클라이언트 초기화
 @st.cache_resource
 def init_supabase():
@@ -146,7 +137,7 @@ if app_mode == "☁️ 클라우드 데이터 히스토리":
                 if selected_date is not None:
                     filtered_df = filtered_df[pd.to_datetime(filtered_df['created_at']).dt.date == selected_date]
                 
-                st.dataframe(filtered_df, use_container_width=True)
+                st.dataframe(filtered_df, width="stretch")
                 
                 # 상세 보기
                 st.markdown("#### 선택 데이터 다운로드")
@@ -167,6 +158,14 @@ if app_mode == "☁️ 클라우드 데이터 히스토리":
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
+if 'motion_capture' not in st.session_state or not isinstance(
+    st.session_state['motion_capture'],
+    MotionCaptureSession,
+):
+    st.session_state['motion_capture'] = MotionCaptureSession(DATA_DIR)
+
+motion_capture = st.session_state['motion_capture']
+
 
 def sanitize_filename(name):
     cleaned = re.sub(r'[\\/:*?"<>|]+', '_', name.strip())
@@ -174,21 +173,8 @@ def sanitize_filename(name):
     return cleaned or f"motion_{int(time.time())}"
 
 
-def unique_motion_path(base_name):
-    candidate = os.path.join(DATA_DIR, f"{base_name}.json")
-    if not os.path.exists(candidate):
-        return candidate
-
-    index = 2
-    while True:
-        candidate = os.path.join(DATA_DIR, f"{base_name}_{index}.json")
-        if not os.path.exists(candidate):
-            return candidate
-        index += 1
-
 mp_hands = mp.solutions.hands
 mp_holistic = mp.solutions.holistic
-mp_drawing = mp.solutions.drawing_utils
 
 # 좌/우 2단 레이아웃 (이미지 참고)
 col_left, col_right = st.columns([1, 1], gap="large")
@@ -196,27 +182,8 @@ col_left, col_right = st.columns([1, 1], gap="large")
 with col_left:
     st.markdown("### 🔴 녹화 (Record)")
     
-    # 상단 컨트롤
-    ctrl_col1, ctrl_col2 = st.columns([1, 1])
-    with ctrl_col1:
-        webcam_label = "📷 웹캠 끄기" if st.session_state['webcam_on'] else "📷 웹캠 켜기"
-        webcam_type = "secondary" if st.session_state['webcam_on'] else "primary"
-        if st.button(webcam_label, use_container_width=True, type=webcam_type):
-            st.session_state['webcam_on'] = not st.session_state['webcam_on']
-            if not st.session_state['webcam_on']:
-                st.session_state['recording'] = False
-                st.session_state['countdown'] = False
-                if 'camera_cap' in st.session_state:
-                    st.session_state['camera_cap'].release()
-                    del st.session_state['camera_cap']
-            st.rerun()
-        webcam_on = st.session_state['webcam_on']
-    with ctrl_col2:
-        record_duration = st.slider("RECORD DURATION (s)", 1, 15, 5)
-        
-    stframe = st.empty()
-    
-    # 하단 버튼 및 입력부
+    record_duration = st.slider("RECORD DURATION (s)", 1, 15, 5)
+
     st.markdown("##### 💾 저장 설정")
     input_col1, input_col2 = st.columns(2)
     with input_col1:
@@ -224,17 +191,57 @@ with col_left:
     with input_col2:
         save_name = sanitize_filename(project_name)
         st.text_input("저장 파일명", value=f"{save_name}.json", disabled=True)
-        
-    rec_clicked = st.button("🔴 REC (녹화 시작)", use_container_width=True, type="primary")
+
+    st.caption("아래 버튼으로 브라우저 카메라 권한을 허용한 뒤 녹화를 시작하세요.")
+    webrtc_ctx = webrtc_streamer(
+        key="motion-capture-webrtc",
+        rtc_configuration={
+            "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}],
+        },
+        media_stream_constraints={
+            "video": {
+                "width": {"ideal": 640},
+                "height": {"ideal": 480},
+                "frameRate": {"ideal": 20, "max": 24},
+                "facingMode": "user",
+            },
+            "audio": False,
+        },
+        video_frame_callback=motion_capture.process_video_frame,
+        on_video_ended=motion_capture.stop_stream,
+        async_processing=False,
+        sendback_audio=False,
+        media_toggle_controls=False,
+        video_html_attrs={
+            "autoPlay": True,
+            "controls": False,
+            "muted": True,
+            "playsInline": True,
+            "style": {"width": "100%"},
+        },
+        translations={
+            "start": "웹캠 켜기",
+            "stop": "웹캠 끄기",
+            "select_device": "카메라 선택",
+            "device_ask_permission": "카메라 사용 권한을 허용해 주세요.",
+            "device_not_available": "사용 가능한 카메라를 찾을 수 없습니다.",
+            "device_access_denied": "브라우저의 카메라 권한이 차단되었습니다.",
+        },
+    )
+    webcam_on = webrtc_ctx.state.playing
+    recording_status = st.empty()
+
+    rec_clicked = st.button(
+        "🔴 REC (녹화 시작)",
+        width="stretch",
+        type="primary",
+        disabled=not webcam_on,
+    )
     if rec_clicked:
-        if webcam_on:
-            st.session_state['countdown'] = True
-            st.session_state['countdown_start'] = time.time()
-            st.session_state['recording'] = False
-            st.session_state['recorded_data'] = []
-            st.rerun()
+        if motion_capture.start_recording(record_duration, save_name):
+            recording_status.info("3초 후 녹화를 시작합니다.")
         else:
-            st.warning("먼저 웹캠을 켜주세요!")
+            recording_status.warning("이미 카운트다운 또는 녹화가 진행 중입니다.")
 
 with col_right:
     st.markdown("### ▶ 재생 (Playback)")
@@ -256,7 +263,7 @@ with col_right:
                         if st.button(
                             motion_file,
                             key=f"select_motion_{motion_file}",
-                            use_container_width=True,
+                            width="stretch",
                             type="primary" if is_selected else "secondary",
                         ):
                             st.session_state['selected_file'] = motion_file
@@ -274,7 +281,7 @@ with col_right:
                 st.caption("저장된 모션이 없습니다.")
         selected_file = st.session_state['selected_file']
         speed = st.selectbox("Speed", [0.5, 1.0, 2.0], index=1)
-        play_clicked = st.button("▶ PLAYBACK", use_container_width=True, type="primary")
+        play_clicked = st.button("▶ PLAYBACK", width="stretch", type="primary")
         
         # 다운로드 및 클라우드 업로드 버튼
         if selected_file:
@@ -290,10 +297,10 @@ with col_right:
                         data=json_data,
                         file_name=selected_file,
                         mime="application/json",
-                        use_container_width=True
+                        width="stretch"
                     )
                 with cloud_col:
-                    if st.button("☁️ DB 업로드", use_container_width=True, help="Supabase 클라우드 DB에 데이터를 저장합니다."):
+                    if st.button("☁️ DB 업로드", width="stretch", help="Supabase 클라우드 DB에 데이터를 저장합니다."):
                         if supabase_client is None:
                             st.error("Supabase API Key가 설정되지 않았습니다. .streamlit/secrets.toml 파일을 확인해주세요.")
                         else:
@@ -422,10 +429,10 @@ if selected_file:
                                 legend=dict(orientation="h", yanchor="bottom", y=-0.45, xanchor="left", x=0),
                                 margin=dict(l=10, r=10, t=48, b=95),
                             )
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width="stretch")
 
             with st.expander("전체 좌표 데이터", expanded=False):
-                st.dataframe(analysis_df, use_container_width=True)
+                st.dataframe(analysis_df, width="stretch")
         else:
             analysis_viewer.info("분석할 손가락 좌표 데이터가 없습니다.")
     except Exception as e:
@@ -526,7 +533,7 @@ if play_clicked and selected_file and not webcam_on:
             fig = build_skeleton_figure(frame_data, camera_eye)
             playback_viewer.plotly_chart(
                 fig,
-                use_container_width=True,
+                width="stretch",
                 key=f"playback_single_{selected_file}_{frame_index}"
             )
             time.sleep(frame_delay)
@@ -537,122 +544,29 @@ elif selected_file and not webcam_on:
 
     if data:
         preview_fig = build_skeleton_figure(data[0], dict(x=0, y=0, z=1.5))
-        playback_viewer.plotly_chart(preview_fig, use_container_width=True, key=f"playback_preview_{selected_file}")
-elif webcam_on:
-    # 카메라 리소스를 세션 상태에 저장하여, 버튼 클릭 시 앱이 재실행되어도 카메라가 끊기지 않게 유지합니다.
-    if 'camera_cap' not in st.session_state or not st.session_state['camera_cap'].isOpened():
-        # Windows에서 웹캠 로딩 속도 지연(MSMF)을 피하기 위해 DirectShow(CAP_DSHOW) 백엔드를 강제 적용
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        st.session_state['camera_cap'] = cap
-    else:
-        cap = st.session_state['camera_cap']
-    
-    frame_count = 0
-    with mp_holistic.Holistic(min_detection_confidence=0.5, min_tracking_confidence=0.5) as holistic:
-        for _ in range(180):
-            ret, frame = cap.read()
-            if not ret:
-                stframe.error("웹캠에서 영상을 가져올 수 없습니다. 다른 프로그램에서 카메라를 사용 중인지 확인하세요.")
-                break
-                
-            frame_count += 1
-            frame = cv2.flip(frame, 1)
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = holistic.process(frame_rgb)
-            
-            # --- 3초 카운트다운 처리 ---
-            if st.session_state.get('countdown', False):
-                cd_elapsed = time.time() - st.session_state['countdown_start']
-                cd_remains = 3.0 - cd_elapsed
-                
-                if cd_remains > 0:
-                    cd_sec = int(cd_remains) + 1
-                    cv2.putText(frame, f"Starting in {cd_sec}...", (160, 240), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 255), 4)
-                else:
-                    # 카운트다운 완료 후 실제 녹화 시작
-                    st.session_state['countdown'] = False
-                    st.session_state['recording'] = True
-                    st.session_state['start_time'] = time.time()
-            
-            # 화면에 뼈대 그리기
-            if results.pose_landmarks:
-                mp_drawing.draw_landmarks(frame, results.pose_landmarks, mp_holistic.POSE_CONNECTIONS)
-            if results.left_hand_landmarks:
-                mp_drawing.draw_landmarks(frame, results.left_hand_landmarks, mp_hands.HAND_CONNECTIONS)
-            if results.right_hand_landmarks:
-                mp_drawing.draw_landmarks(frame, results.right_hand_landmarks, mp_hands.HAND_CONNECTIONS)
-            
-            # 데이터 저장 로직
-            if st.session_state.get('recording', False):
-                frame_pose = []
-                if results.pose_landmarks:
-                    frame_pose = [{"id": idx, "x": lm.x, "y": lm.y, "z": lm.z} for idx, lm in enumerate(results.pose_landmarks.landmark)]
-                    
-                left_hand_data = []
-                right_hand_data = []
-                all_hands_data = []
-                if results.left_hand_landmarks:
-                    left_hand_data = [{"id": idx, "x": lm.x, "y": lm.y, "z": lm.z} for idx, lm in enumerate(results.left_hand_landmarks.landmark)]
-                    all_hands_data.append(left_hand_data)
-                if results.right_hand_landmarks:
-                    right_hand_data = [{"id": idx, "x": lm.x, "y": lm.y, "z": lm.z} for idx, lm in enumerate(results.right_hand_landmarks.landmark)]
-                    all_hands_data.append(right_hand_data)
-                    
-                st.session_state['recorded_data'].append({
-                    "time": time.time(),
-                    "pose": frame_pose,
-                    "left_hand": left_hand_data,
-                    "right_hand": right_hand_data,
-                    "hands": all_hands_data
-                })
-            
-            if st.session_state.get('recording', False):
-                elapsed = time.time() - st.session_state['start_time']
-                remains = max(0, record_duration - elapsed)
-                cv2.putText(frame, f"Recording: {remains:.1f}s", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
-                
-                if remains <= 0:
-                    st.session_state['recording'] = False
-                    if len(st.session_state['recorded_data']) > 0:
-                        filename = unique_motion_path(sanitize_filename(project_name))
-                        with open(filename, 'w') as f:
-                            json.dump(st.session_state['recorded_data'], f)
+        playback_viewer.plotly_chart(preview_fig, width="stretch", key=f"playback_preview_{selected_file}")
 
-                        st.session_state['selected_file'] = os.path.basename(filename)
-                        st.session_state['webcam_on'] = False
-                        st.session_state['countdown'] = False
-                        st.session_state['recording'] = False
-
-                        if 'camera_cap' in st.session_state:
-                            st.session_state['camera_cap'].release()
-                            del st.session_state['camera_cap']
-
-                        saved_files = sorted(
-                            [os.path.join(DATA_DIR, f) for f in os.listdir(DATA_DIR) if f.endswith(".json")],
-                            key=os.path.getmtime,
-                            reverse=True
-                        )
-                        for old_file in saved_files[10:]:
-                            try:
-                                os.remove(old_file)
-                            except:
-                                pass
-
-                        st.rerun()
-            else:
-                is_tracking = results.pose_landmarks or results.left_hand_landmarks or results.right_hand_landmarks
-                cv2.putText(frame, "ACTIVE TRACKING" if is_tracking else "SEARCHING BODY/HAND", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            
-            stframe.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB), channels="RGB", width=468)
-
-        if st.session_state.get('webcam_on', False):
+if webcam_on:
+    while webrtc_ctx.state.playing:
+        completed_filename = motion_capture.take_completed_filename()
+        if completed_filename:
+            st.session_state['selected_file'] = completed_filename
+            recording_status.success(f"{completed_filename} 저장을 완료했습니다.")
             st.rerun()
 
-# 체크박스가 해제되었을 때 카메라 리소스 반환
-if not webcam_on and 'camera_cap' in st.session_state:
-    st.session_state['camera_cap'].release()
-    del st.session_state['camera_cap']
+        capture_status = motion_capture.status()
+        if capture_status['last_error']:
+            recording_status.error(
+                f"영상 처리 중 오류가 발생했습니다: {capture_status['last_error']}"
+            )
+        elif capture_status['countdown_remaining'] is not None:
+            seconds = max(1, int(capture_status['countdown_remaining']) + 1)
+            recording_status.info(f"{seconds}초 후 녹화를 시작합니다.")
+        elif capture_status['recording_remaining'] is not None:
+            recording_status.warning(
+                f"녹화 중 · {capture_status['recording_remaining']:.1f}초 남음"
+            )
+        else:
+            recording_status.success("브라우저 카메라가 연결되었습니다.")
 
+        time.sleep(0.1)
