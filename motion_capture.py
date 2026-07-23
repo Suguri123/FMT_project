@@ -20,7 +20,7 @@ class MotionCaptureSession:
 
         self._state_lock = threading.Lock()
         self._processor_lock = threading.Lock()
-        self._holistic = None
+        self._hands_processor = None
         self._countdown_started_at: float | None = None
         self._recording_started_at: float | None = None
         self._record_duration = 5.0
@@ -29,7 +29,6 @@ class MotionCaptureSession:
         self._completed_filename: str | None = None
         self._last_error: str | None = None
 
-        self._mp_holistic = mp.solutions.holistic
         self._mp_hands = mp.solutions.hands
         self._mp_drawing = mp.solutions.drawing_utils
 
@@ -78,11 +77,11 @@ class MotionCaptureSession:
                 self._countdown_started_at = None
                 self._recording_started_at = None
                 self._frames = []
-                holistic = self._holistic
-                self._holistic = None
+                hands_processor = self._hands_processor
+                self._hands_processor = None
 
-            if holistic is not None:
-                holistic.close()
+            if hands_processor is not None:
+                hands_processor.close()
 
     def process_video_frame(self, frame: av.VideoFrame) -> av.VideoFrame:
         image = cv2.flip(frame.to_ndarray(format='bgr24'), 1)
@@ -90,10 +89,10 @@ class MotionCaptureSession:
 
         try:
             with self._processor_lock:
-                holistic = self._get_holistic()
+                hands_processor = self._get_hands_processor()
                 rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 rgb_image.flags.writeable = False
-                results = holistic.process(rgb_image)
+                results = hands_processor.process(rgb_image)
                 self._draw_landmarks(image, results)
 
                 now = time.time()
@@ -140,37 +139,23 @@ class MotionCaptureSession:
 
         return av.VideoFrame.from_ndarray(image, format='bgr24')
 
-    def _get_holistic(self):
+    def _get_hands_processor(self):
         with self._state_lock:
-            if self._holistic is None:
-                self._holistic = self._mp_holistic.Holistic(
+            if self._hands_processor is None:
+                self._hands_processor = self._mp_hands.Hands(
                     static_image_mode=False,
                     min_detection_confidence=0.5,
                     min_tracking_confidence=0.5,
                     model_complexity=1,
-                    smooth_landmarks=False,
-                    enable_segmentation=False,
-                    refine_face_landmarks=False,
+                    max_num_hands=2,
                 )
-            return self._holistic
+            return self._hands_processor
 
     def _draw_landmarks(self, image, results) -> None:
-        if results.pose_landmarks:
+        for landmarks in results.multi_hand_landmarks or []:
             self._mp_drawing.draw_landmarks(
                 image,
-                results.pose_landmarks,
-                self._mp_holistic.POSE_CONNECTIONS,
-            )
-        if results.left_hand_landmarks:
-            self._mp_drawing.draw_landmarks(
-                image,
-                results.left_hand_landmarks,
-                self._mp_hands.HAND_CONNECTIONS,
-            )
-        if results.right_hand_landmarks:
-            self._mp_drawing.draw_landmarks(
-                image,
-                results.right_hand_landmarks,
+                landmarks,
                 self._mp_hands.HAND_CONNECTIONS,
             )
 
@@ -184,13 +169,32 @@ class MotionCaptureSession:
         ]
 
     def _serialize_results(self, results, timestamp: float) -> dict:
-        pose = self._landmarks_to_dict(results.pose_landmarks)
-        left_hand = self._landmarks_to_dict(results.left_hand_landmarks)
-        right_hand = self._landmarks_to_dict(results.right_hand_landmarks)
-        hands = [hand for hand in (left_hand, right_hand) if hand]
+        left_hand = []
+        right_hand = []
+        hands = []
+
+        hand_landmarks = results.multi_hand_landmarks or []
+        handedness_items = results.multi_handedness or []
+        for index, landmarks in enumerate(hand_landmarks):
+            hand_data = self._landmarks_to_dict(landmarks)
+            hands.append(hand_data)
+
+            label = ''
+            if index < len(handedness_items) and handedness_items[index].classification:
+                label = handedness_items[index].classification[0].label
+
+            if label == 'Left' and not left_hand:
+                left_hand = hand_data
+            elif label == 'Right' and not right_hand:
+                right_hand = hand_data
+            elif not left_hand:
+                left_hand = hand_data
+            elif not right_hand:
+                right_hand = hand_data
+
         return {
             'time': timestamp,
-            'pose': pose,
+            'pose': [],
             'left_hand': left_hand,
             'right_hand': right_hand,
             'hands': hands,
@@ -220,11 +224,10 @@ class MotionCaptureSession:
                 return (f'Recording: {max(0.0, remaining):.1f}s', (0, 0, 255))
 
             tracking = bool(
-                frame_data['pose']
-                or frame_data['left_hand']
+                frame_data['left_hand']
                 or frame_data['right_hand']
             )
-            label = 'ACTIVE TRACKING' if tracking else 'SEARCHING BODY/HAND'
+            label = 'ACTIVE HAND TRACKING' if tracking else 'SEARCHING HAND'
             return (label, (0, 255, 0))
 
     def _save_recording(self, frames: list[dict], base_name: str) -> str:

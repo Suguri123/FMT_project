@@ -175,7 +175,6 @@ def sanitize_filename(name):
 
 
 mp_hands = mp.solutions.hands
-mp_holistic = mp.solutions.holistic
 
 # 좌/우 2단 레이아웃 (이미지 참고)
 col_left, col_right = st.columns([1, 1], gap="large")
@@ -573,25 +572,6 @@ def build_skeleton_figure(frame_data, camera_eye):
             hands_to_draw.append(frame_data['right_hand'])
     if not hands_to_draw and 'landmarks' in frame_data:
         hands_to_draw = [frame_data.get('landmarks')]
-    pose_to_draw = frame_data.get('pose', [])
-
-    if pose_to_draw:
-        x_p = [lm['x'] for lm in pose_to_draw]
-        y_p = [-lm['y'] for lm in pose_to_draw]
-        z_p = [lm['z'] for lm in pose_to_draw]
-        fig.add_trace(go.Scatter3d(
-            x=x_p, y=y_p, z=z_p, mode='markers',
-            marker=dict(size=4, color='#2ecc71')
-        ))
-
-        for start_idx, end_idx in mp_holistic.POSE_CONNECTIONS:
-            if start_idx < len(x_p) and end_idx < len(x_p):
-                fig.add_trace(go.Scatter3d(
-                    x=[x_p[start_idx], x_p[end_idx]],
-                    y=[y_p[start_idx], y_p[end_idx]],
-                    z=[z_p[start_idx], z_p[end_idx]],
-                    mode='lines', line=dict(color='#27ae60', width=3)
-                ))
 
     for hand_points in hands_to_draw:
         if not hand_points:
