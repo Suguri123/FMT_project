@@ -10,6 +10,22 @@ import av
 import cv2
 import mediapipe as mp
 
+try:
+    import serial
+except ImportError:
+    serial = None
+
+
+FIST_FINGER_IDS = {
+    'index': {'mcp': 5, 'pip': 6, 'tip': 8},
+    'middle': {'mcp': 9, 'pip': 10, 'tip': 12},
+    'ring': {'mcp': 13, 'pip': 14, 'tip': 16},
+    'pinky': {'mcp': 17, 'pip': 18, 'tip': 20},
+}
+
+LEFT_FIST_THRESHOLD = 0.60
+ARDUINO_BAUD_RATE = 9600
+
 
 class MotionCaptureSession:
     # Thread-safe MediaPipe processor for one Streamlit browser session.
@@ -28,6 +44,13 @@ class MotionCaptureSession:
         self._frames: list[dict] = []
         self._completed_filename: str | None = None
         self._last_error: str | None = None
+        self._arduino_enabled = False
+        self._arduino_port = 'COM3'
+        self._arduino = None
+        self._arduino_last_command: str | None = None
+        self._arduino_last_sent_at = 0.0
+        self._arduino_status = '실시간 Arduino 전송 꺼짐'
+        self._arduino_error: str | None = None
 
         self._mp_hands = mp.solutions.hands
         self._mp_drawing = mp.solutions.drawing_utils
@@ -63,7 +86,24 @@ class MotionCaptureSession:
                 'countdown_remaining': countdown_remaining,
                 'recording_remaining': recording_remaining,
                 'last_error': self._last_error,
+                'arduino_enabled': self._arduino_enabled,
+                'arduino_status': self._arduino_status,
+                'arduino_error': self._arduino_error,
             }
+
+    def configure_arduino_realtime(self, enabled: bool, port: str) -> None:
+        port = (port or 'COM3').strip()
+        with self._processor_lock:
+            with self._state_lock:
+                port_changed = port != self._arduino_port
+                self._arduino_enabled = enabled
+                self._arduino_port = port
+                if not enabled:
+                    self._arduino_status = '실시간 Arduino 전송 꺼짐'
+                    self._arduino_error = None
+
+            if not enabled or port_changed:
+                self._close_arduino()
 
     def take_completed_filename(self) -> str | None:
         with self._state_lock:
@@ -79,9 +119,14 @@ class MotionCaptureSession:
                 self._frames = []
                 hands_processor = self._hands_processor
                 self._hands_processor = None
+                arduino = self._arduino
+                self._arduino = None
+                self._arduino_last_command = None
 
             if hands_processor is not None:
                 hands_processor.close()
+            if arduino is not None:
+                arduino.close()
 
     def process_video_frame(self, frame: av.VideoFrame) -> av.VideoFrame:
         image = cv2.flip(frame.to_ndarray(format='bgr24'), 1)
@@ -97,6 +142,7 @@ class MotionCaptureSession:
 
                 now = time.time()
                 frame_data = self._serialize_results(results, now)
+                self._update_arduino_from_frame(frame_data, now)
                 overlay_text, overlay_color = self._update_recording_state(now, frame_data)
 
                 cv2.putText(
@@ -151,6 +197,26 @@ class MotionCaptureSession:
                 )
             return self._hands_processor
 
+    def _get_arduino(self):
+        if serial is None:
+            raise RuntimeError('pyserial이 설치되어 있지 않습니다. pip install pyserial을 실행하세요.')
+
+        if self._arduino is None or not self._arduino.is_open:
+            self._arduino = serial.Serial(self._arduino_port, ARDUINO_BAUD_RATE, timeout=1)
+            time.sleep(2)
+            self._arduino_last_command = None
+        return self._arduino
+
+    def _close_arduino(self) -> None:
+        arduino = self._arduino
+        self._arduino = None
+        self._arduino_last_command = None
+        if arduino is not None:
+            try:
+                arduino.close()
+            except Exception:
+                pass
+
     def _draw_landmarks(self, image, results) -> None:
         for landmarks in results.multi_hand_landmarks or []:
             self._mp_drawing.draw_landmarks(
@@ -199,6 +265,71 @@ class MotionCaptureSession:
             'right_hand': right_hand,
             'hands': hands,
         }
+
+    @staticmethod
+    def _landmark_distance(first, second) -> float:
+        return (
+            (first['x'] - second['x']) ** 2
+            + (first['y'] - second['y']) ** 2
+            + (first['z'] - second['z']) ** 2
+        ) ** 0.5
+
+    def _is_left_hand_fist(self, frame_data: dict) -> bool:
+        hand_points = frame_data.get('left_hand') or []
+        landmarks = {point['id']: point for point in hand_points}
+        wrist = landmarks.get(0)
+        middle_mcp = landmarks.get(9)
+        if not wrist or not middle_mcp:
+            return False
+
+        palm_size = self._landmark_distance(wrist, middle_mcp)
+        if palm_size <= 0:
+            return False
+
+        folded_count = 0
+        checked_count = 0
+        for ids in FIST_FINGER_IDS.values():
+            mcp = landmarks.get(ids['mcp'])
+            pip = landmarks.get(ids['pip'])
+            tip = landmarks.get(ids['tip'])
+            if not mcp or not pip or not tip:
+                continue
+
+            checked_count += 1
+            tip_to_wrist = self._landmark_distance(tip, wrist)
+            pip_to_wrist = self._landmark_distance(pip, wrist)
+            tip_to_mcp = self._landmark_distance(tip, mcp)
+            if tip_to_wrist <= pip_to_wrist * 1.02 and tip_to_mcp < palm_size * 0.90:
+                folded_count += 1
+
+        if checked_count < 4:
+            return False
+        return folded_count / checked_count >= LEFT_FIST_THRESHOLD
+
+    def _update_arduino_from_frame(self, frame_data: dict, now: float) -> None:
+        with self._state_lock:
+            enabled = self._arduino_enabled
+            if not enabled:
+                return
+
+        command = 'ON' if self._is_left_hand_fist(frame_data) else 'OFF'
+        if command == self._arduino_last_command and now - self._arduino_last_sent_at < 0.5:
+            return
+
+        try:
+            arduino = self._get_arduino()
+            arduino.write(f'{command}\n'.encode('ascii'))
+            arduino.flush()
+            self._arduino_last_command = command
+            self._arduino_last_sent_at = now
+            with self._state_lock:
+                self._arduino_error = None
+                self._arduino_status = f'{self._arduino_port}로 {command} 전송 중'
+        except Exception as exc:
+            self._close_arduino()
+            with self._state_lock:
+                self._arduino_error = str(exc)
+                self._arduino_status = 'Arduino 전송 오류'
 
     def _update_recording_state(
         self,

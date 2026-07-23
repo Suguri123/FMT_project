@@ -17,6 +17,10 @@ except ImportError:
 
 from motion_capture import MotionCaptureSession
 
+ARDUINO_DEFAULT_PORT = "COM3"
+ARDUINO_BAUD_RATE = 9600
+LEFT_FIST_THRESHOLD = 0.60
+
 # 페이지 설정
 st.set_page_config(page_title="FINGER MOTION TRACKER", layout="wide", initial_sidebar_state="collapsed")
 
@@ -171,6 +175,7 @@ if 'motion_capture' not in st.session_state or not isinstance(
     st.session_state['motion_capture'] = MotionCaptureSession(DATA_DIR)
 
 motion_capture = st.session_state['motion_capture']
+st.session_state.setdefault('arduino_realtime_enabled', False)
 
 
 def sanitize_filename(name):
@@ -257,6 +262,36 @@ with col_left:
                 recording_status.info("3초 후 녹화를 시작합니다.")
             else:
                 recording_status.warning("이미 카운트다운 또는 녹화가 진행 중입니다.")
+
+        st.markdown("##### Arduino 실시간 전송")
+        realtime_arduino_port = st.text_input(
+            "Arduino 포트",
+            value=ARDUINO_DEFAULT_PORT,
+            key="realtime_arduino_port",
+        )
+        realtime_label = (
+            "실시간 웹캠 화면 전송 중지"
+            if st.session_state['arduino_realtime_enabled']
+            else "실시간 웹캠 화면 전송 시작"
+        )
+        realtime_clicked = st.button(
+            realtime_label,
+            width="stretch",
+            disabled=not webcam_on,
+            icon=":material/sensors:",
+            key="toggle_realtime_arduino",
+        )
+        if realtime_clicked:
+            st.session_state['arduino_realtime_enabled'] = not st.session_state['arduino_realtime_enabled']
+
+        if not webcam_on:
+            st.session_state['arduino_realtime_enabled'] = False
+
+        motion_capture.configure_arduino_realtime(
+            st.session_state['arduino_realtime_enabled'],
+            realtime_arduino_port,
+        )
+        arduino_realtime_status = st.empty()
 
 with col_right:
     st.markdown("### ▶ 재생 (Playback)")
@@ -359,9 +394,6 @@ JOINT_LABELS = {
 }
 
 HAND_KEYS = [("왼손", "left_hand", 0), ("오른손", "right_hand", 1)]
-ARDUINO_DEFAULT_PORT = "COM3"
-ARDUINO_BAUD_RATE = 9600
-LEFT_FIST_THRESHOLD = 0.60
 
 FIST_FINGER_IDS = {
     "검지": {"mcp": 5, "pip": 6, "tip": 8},
@@ -733,6 +765,16 @@ if webcam_on:
             st.rerun()
 
         capture_status = motion_capture.status()
+        if capture_status['arduino_enabled']:
+            if capture_status['arduino_error']:
+                arduino_realtime_status.error(
+                    f"Arduino 실시간 전송 오류: {capture_status['arduino_error']}"
+                )
+            else:
+                arduino_realtime_status.success(capture_status['arduino_status'])
+        else:
+            arduino_realtime_status.info("Arduino 실시간 전송 꺼짐")
+
         if capture_status['last_error']:
             recording_status.error(
                 f"영상 처리 중 오류가 발생했습니다: {capture_status['last_error']}"
