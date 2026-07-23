@@ -412,12 +412,12 @@ def describe_hand_shape(hand_points):
         tip_to_wrist = landmark_distance(tip, wrist)
         pip_to_wrist = landmark_distance(pip, wrist)
         tip_to_mcp = landmark_distance(tip, mcp)
-        folded = tip_to_wrist < palm_size * 1.35 or tip_to_wrist <= pip_to_wrist * 1.08
-        compact = tip_to_mcp < palm_size * 0.95
+        extended = tip_to_wrist > pip_to_wrist * 1.12 and tip_to_mcp > palm_size * 0.65
+        folded = tip_to_wrist <= pip_to_wrist * 1.02 and tip_to_mcp < palm_size * 0.90
 
-        if folded or compact:
+        if folded:
             folded_fingers.append(finger_name)
-        else:
+        elif extended:
             extended_fingers.append(finger_name)
 
     if len(folded_fingers) >= 4:
