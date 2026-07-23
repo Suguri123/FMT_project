@@ -516,31 +516,6 @@ def build_motion_shape_summary(data):
     return summaries
 
 
-def build_left_fist_arduino_signal(data):
-    stats = calculate_hand_shape_stats(data, "left_hand", 0)
-    detected_frames = stats["detected_frames"]
-    if not detected_frames:
-        return {
-            "command": "OFF",
-            "is_fist": False,
-            "ratio": 0.0,
-            "message": "왼손 좌표가 없어 OFF 신호를 보냅니다.",
-        }
-
-    fist_ratio = stats["shape_counts"]["주먹"] / detected_frames
-    is_fist = fist_ratio >= LEFT_FIST_THRESHOLD
-    command = "ON" if is_fist else "OFF"
-    return {
-        "command": command,
-        "is_fist": is_fist,
-        "ratio": fist_ratio,
-        "message": (
-            f"왼손 주먹 비율 {fist_ratio:.0%}: "
-            f"Arduino에 {command} 신호를 보냅니다."
-        ),
-    }
-
-
 def get_left_hand_command_for_frame(frame):
     hand_points = get_hand_points(frame, "left_hand", 0)
     if not hand_points:
@@ -630,24 +605,12 @@ if selected_file:
 
                 with st.container(border=True):
                     st.markdown("#### Arduino LED 제어")
-                    arduino_signal = build_left_fist_arduino_signal(data)
-                    st.write(arduino_signal["message"])
+                    st.write("저장된 모션의 시간 순서대로 왼손 형상을 읽어 LED를 제어합니다.")
                     arduino_port = st.text_input(
                         "Arduino 포트",
                         value=ARDUINO_DEFAULT_PORT,
                         key=f"arduino_port_{selected_file}",
                     )
-
-                    if st.button(
-                        "왼손 주먹 결과를 Arduino로 전송",
-                        key=f"send_arduino_{selected_file}",
-                        icon=":material/memory:",
-                    ):
-                        try:
-                            motion_capture.send_arduino_command(arduino_port, arduino_signal["command"])
-                            st.success(f"{arduino_port}로 {arduino_signal['command']} 신호를 보냈습니다.")
-                        except Exception as e:
-                            st.error(f"Arduino 전송 실패: {e}")
 
                     if st.button(
                         "저장 데이터 시간 순서대로 Arduino 전송",
