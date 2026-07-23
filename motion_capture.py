@@ -92,6 +92,7 @@ class MotionCaptureSession:
             with self._processor_lock:
                 holistic = self._get_holistic()
                 rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                rgb_image.flags.writeable = False
                 results = holistic.process(rgb_image)
                 self._draw_landmarks(image, results)
 
@@ -143,9 +144,13 @@ class MotionCaptureSession:
         with self._state_lock:
             if self._holistic is None:
                 self._holistic = self._mp_holistic.Holistic(
+                    static_image_mode=False,
                     min_detection_confidence=0.5,
                     min_tracking_confidence=0.5,
-                    model_complexity=1,
+                    model_complexity=0,
+                    smooth_landmarks=False,
+                    enable_segmentation=False,
+                    refine_face_landmarks=False,
                 )
             return self._holistic
 

@@ -181,72 +181,77 @@ col_left, col_right = st.columns([1, 1], gap="large")
 
 with col_left:
     st.markdown("### 🔴 녹화 (Record)")
-    
-    record_duration = st.slider("RECORD DURATION (s)", 1, 15, 5)
+    camera_col, settings_col = st.columns([1, 1], gap="medium")
 
-    st.markdown("##### 💾 저장 설정")
-    input_col1, input_col2 = st.columns(2)
-    with input_col1:
-        project_name = st.text_input("프로젝트 명", value="기본 프로젝트", key="project_name_input")
-    with input_col2:
+    with camera_col:
+        st.markdown("##### 📷 카메라")
+        webrtc_ctx = webrtc_streamer(
+            key="motion-capture-webrtc",
+            rtc_configuration={
+                "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}],
+            },
+            media_stream_constraints={
+                "video": {
+                    "width": {"ideal": 480},
+                    "height": {"ideal": 360},
+                    "frameRate": {"ideal": 15, "max": 18},
+                    "facingMode": "user",
+                },
+                "audio": False,
+            },
+            video_frame_callback=motion_capture.process_video_frame,
+            on_video_ended=motion_capture.stop_stream,
+            async_processing=True,
+            sendback_audio=False,
+            media_toggle_controls=False,
+            video_html_attrs={
+                "autoPlay": True,
+                "controls": False,
+                "muted": True,
+                "playsInline": True,
+                "style": {
+                    "width": "100%",
+                    "height": "auto",
+                    "display": "block",
+                    "margin": "0 auto",
+                },
+            },
+            translations={
+                "start": "웹캠 켜기",
+                "stop": "웹캠 끄기",
+                "select_device": "카메라 선택",
+                "device_ask_permission": "카메라 사용 권한을 허용해 주세요.",
+                "device_not_available": "사용 가능한 카메라를 찾을 수 없습니다.",
+                "device_access_denied": "브라우저의 카메라 권한이 차단되었습니다.",
+            },
+        )
+        webcam_on = webrtc_ctx.state.playing
+        st.caption("웹캠을 켜고 카메라 권한을 허용해 주세요.")
+
+    with settings_col:
+        record_duration = st.slider("RECORD DURATION (s)", 1, 15, 5)
+
+        st.markdown("##### 💾 저장 설정")
+        project_name = st.text_input(
+            "프로젝트 명",
+            value="기본 프로젝트",
+            key="project_name_input",
+        )
         save_name = sanitize_filename(project_name)
         st.text_input("저장 파일명", value=f"{save_name}.json", disabled=True)
 
-    st.caption("아래 버튼으로 브라우저 카메라 권한을 허용한 뒤 녹화를 시작하세요.")
-    webrtc_ctx = webrtc_streamer(
-        key="motion-capture-webrtc",
-        rtc_configuration={
-            "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}],
-        },
-        media_stream_constraints={
-            "video": {
-                "width": {"ideal": 640},
-                "height": {"ideal": 480},
-                "frameRate": {"ideal": 20, "max": 24},
-                "facingMode": "user",
-            },
-            "audio": False,
-        },
-        video_frame_callback=motion_capture.process_video_frame,
-        on_video_ended=motion_capture.stop_stream,
-        async_processing=False,
-        sendback_audio=False,
-        media_toggle_controls=False,
-        video_html_attrs={
-            "autoPlay": True,
-            "controls": False,
-            "muted": True,
-            "playsInline": True,
-            "style": {
-                "width": "50%",
-                "height": "auto",
-                "display": "block",
-                "margin": "0 auto",
-            },
-        },
-        translations={
-            "start": "웹캠 켜기",
-            "stop": "웹캠 끄기",
-            "select_device": "카메라 선택",
-            "device_ask_permission": "카메라 사용 권한을 허용해 주세요.",
-            "device_not_available": "사용 가능한 카메라를 찾을 수 없습니다.",
-            "device_access_denied": "브라우저의 카메라 권한이 차단되었습니다.",
-        },
-    )
-    webcam_on = webrtc_ctx.state.playing
-    recording_status = st.empty()
-
-    rec_clicked = st.button(
-        "🔴 REC (녹화 시작)",
-        width="stretch",
-        type="primary",
-        disabled=not webcam_on,
-    )
-    if rec_clicked:
-        if motion_capture.start_recording(record_duration, save_name):
-            recording_status.info("3초 후 녹화를 시작합니다.")
-        else:
-            recording_status.warning("이미 카운트다운 또는 녹화가 진행 중입니다.")
+        recording_status = st.empty()
+        rec_clicked = st.button(
+            "🔴 REC (녹화 시작)",
+            width="stretch",
+            type="primary",
+            disabled=not webcam_on,
+        )
+        if rec_clicked:
+            if motion_capture.start_recording(record_duration, save_name):
+                recording_status.info("3초 후 녹화를 시작합니다.")
+            else:
+                recording_status.warning("이미 카운트다운 또는 녹화가 진행 중입니다.")
 
 with col_right:
     st.markdown("### ▶ 재생 (Playback)")
