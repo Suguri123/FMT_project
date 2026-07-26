@@ -1456,7 +1456,7 @@ if play_clicked and selected_file and not webcam_on:
             frame_image = build_skeleton_image(frame_data)
             playback_viewer.image(
                 frame_image,
-                width=320,
+                use_container_width=True,
                 caption=f"{selected_file} · frame {frame_index + 1}/{len(data)}",
             )
             previous_t = current_t
@@ -1467,7 +1467,7 @@ elif selected_file and not webcam_on:
 
     if data:
         preview_image = build_skeleton_image(data[0])
-        playback_viewer.image(preview_image, width=320, caption=f"{selected_file} · preview")
+        playback_viewer.image(preview_image, use_container_width=True, caption=f"{selected_file} · preview")
 
 if webcam_on:
     new_motion_saved = False
