@@ -7,3 +7,5 @@ pandas
 plotly
 supabase
 pyserial
+scikit-learn
+joblib

@@ -1,8 +1,7 @@
 #include <Adafruit_NeoPixel.h>
 
-// 왼손 스트립은 D5, 오른손 스트립은 D6에 연결합니다.
-const int LEFT_NEOPIXEL_PIN = 5;
-const int RIGHT_NEOPIXEL_PIN = 6;
+const int LEFT_NEOPIXEL_PIN = D5;
+const int RIGHT_NEOPIXEL_PIN = D6;
 const int NEOPIXEL_COUNT = 8;
 const int LED_BRIGHTNESS = 50;
 
@@ -30,7 +29,6 @@ void showRightCount(int count) {
 
 void showCommand(String command) {
   clearPixels();
-
   if (command == "ON" || command == "L") {
     showLeftCount(1);
   } else if (command == "R") {
@@ -48,13 +46,9 @@ void showCommand(String command) {
     }
   } else if (command.length() >= 2 && (command.charAt(0) == 'L' || command.charAt(0) == 'R')) {
     int ledCount = command.substring(1).toInt();
-    if (command.charAt(0) == 'L') {
-      showLeftCount(ledCount);
-    } else {
-      showRightCount(ledCount);
-    }
+    if (command.charAt(0) == 'L') showLeftCount(ledCount);
+    else showRightCount(ledCount);
   }
-
   leftPixels.show();
   rightPixels.show();
 }
@@ -71,10 +65,7 @@ void setup() {
 }
 
 void loop() {
-  if (Serial.available() <= 0) {
-    return;
-  }
-
+  if (Serial.available() <= 0) return;
   String command = Serial.readStringUntil('\n');
   command.trim();
   showCommand(command);
