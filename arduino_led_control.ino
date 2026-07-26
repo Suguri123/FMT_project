@@ -24,7 +24,7 @@ void showLeftCount(int count) {
 void showRightCount(int count) {
   int safeCount = constrain(count, 0, NEOPIXEL_COUNT);
   for (int i = 0; i < safeCount; i++) {
-    rightPixels.setPixelColor(NEOPIXEL_COUNT - 1 - i, rightPixels.Color(255, 0, 0));
+    rightPixels.setPixelColor(i, rightPixels.Color(255, 0, 0));
   }
 }
 
