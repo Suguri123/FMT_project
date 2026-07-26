@@ -270,6 +270,30 @@ files = sorted(
     reverse=True,
 )
 
+# active files의 실제 존재하는 카테고리만 수집 (전역 변수화)
+active_categories = set()
+file_categories = {}
+if os.path.exists(PHYSICAL_AI_FILE_CATEGORIES_FILE):
+    try:
+        with open(PHYSICAL_AI_FILE_CATEGORIES_FILE, "r", encoding="utf-8") as category_file:
+            file_categories = json.load(category_file)
+    except (OSError, json.JSONDecodeError):
+        pass
+
+for motion_file in files:
+    parts = motion_file.replace('\\', '/').split('/')
+    category = parts[0] if len(parts) > 1 else file_categories.get(motion_file)
+    if not category and '_' in motion_file:
+        name_parts = motion_file.replace('.json', '').split('_')
+        if len(name_parts) >= 3:
+            if name_parts[0].isdigit():
+                category = name_parts[-1]
+            else:
+                category = name_parts[0]
+    if category:
+        active_categories.add(category)
+
+saved_categories = ["전체"] + sorted(list(active_categories))
 
 def sanitize_filename(name):
     cleaned = re.sub(r'[\\/:*?"<>|]+', '_', name.strip())
@@ -1257,6 +1281,12 @@ with tab2:
                                 else:
                                     arduino_port = selected_port_label.replace("⭐ ", "").split(" ")[0]
 
+                                seq_ai_category = st.selectbox(
+                                    "시퀀스 분석에 적용할 AI 모델 카테고리",
+                                    options=saved_categories,
+                                    key=f"seq_ai_category_{selected_file}"
+                                )
+
                                 if st.button(
                                     "저장 데이터 시간 순서대로 Arduino 전송",
                                     key=f"send_arduino_sequence_{selected_file}",
@@ -1264,6 +1294,17 @@ with tab2:
                                     width="stretch",
                                 ):
                                     st.session_state['arduino_realtime_enabled'] = False
+                                    
+                                    # 시퀀스 분석을 위한 AI 모델 로드
+                                    if seq_ai_category == "전체":
+                                        seq_model_path = "physical_ai_model.joblib"
+                                    else:
+                                        seq_model_path = os.path.join(
+                                            "physical_ai_models",
+                                            f"{sanitize_filename(seq_ai_category)}.joblib",
+                                        )
+                                    motion_capture.set_physical_ai_model(seq_model_path, seq_ai_category)
+                                    
                                     motion_capture.configure_arduino_realtime(False, arduino_port)
                                     sequence_status = st.empty()
                                     sequence_progress = st.empty()
