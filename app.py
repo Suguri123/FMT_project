@@ -586,7 +586,7 @@ def build_direction_commands(data, direction):
     return commands
 
 
-def send_saved_motion_to_arduino(data, port, playback_speed, status_box, progress_box, motion_name=None):
+def send_saved_motion_to_arduino(data, port, playback_speed, status_box, progress_box, motion_name=None, playback_viewer=None):
     if not data:
         raise ValueError("전송할 저장 데이터가 없습니다.")
 
@@ -604,6 +604,14 @@ def send_saved_motion_to_arduino(data, port, playback_speed, status_box, progres
             if frame_index > 0:
                 delay = max(0.0, current_t - previous_t) / max(effective_speed, 0.1)
                 time.sleep(delay)
+
+            if playback_viewer is not None:
+                frame_image = build_skeleton_image(frame)
+                playback_viewer.image(
+                    frame_image,
+                    caption=f"{motion_name or '이름 없음'} · 아두이노 전송 동기화 시각화",
+                    use_container_width=True,
+                )
 
             if direction_commands is not None:
                 command = direction_commands[frame_index]
@@ -1318,6 +1326,7 @@ with tab2:
                                             sequence_status,
                                             sequence_progress,
                                             selected_file,
+                                            playback_viewer,
                                         )
                                     except Exception as e:
                                         sequence_status.error(f"전송 실패: {e}")
