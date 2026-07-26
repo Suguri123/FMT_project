@@ -1138,6 +1138,59 @@ with tab2:
                 except:
                     pass
 
+            # ☁️ 카테고리 단위 일괄 DB 업로드 카드
+            if category_files:
+                st.markdown("<div style='height: 15px;'></div>", unsafe_allow_html=True)
+                with st.container():
+                    st.markdown("##### ☁️ 카테고리 일괄 클라우드 업로드")
+                    upload_category_list = sorted(list(category_files.keys()))
+                    selected_upload_category = st.selectbox(
+                        "일괄 업로드할 카테고리 선택",
+                        options=upload_category_list,
+                        key="selected_bulk_upload_category"
+                    )
+                    
+                    if st.button("☁️ 선택한 카테고리의 모든 파일 업로드", key="btn_bulk_upload_category", use_container_width=True):
+                        if supabase_client is None:
+                            st.error("Supabase 연결 설정이 없습니다. Secrets를 확인하세요.")
+                        else:
+                            files_to_upload = category_files.get(selected_upload_category, [])
+                            if not files_to_upload:
+                                st.warning("업로드할 파일이 없습니다.")
+                            else:
+                                success_count = 0
+                                error_count = 0
+                                progress_bar = st.progress(0.0)
+                                status_text = st.empty()
+                                
+                                for idx, f_name in enumerate(files_to_upload):
+                                    status_text.info(f"업로드 진행 중 ({idx+1}/{len(files_to_upload)}): {f_name}")
+                                    file_path = os.path.join(DATA_DIR, f_name)
+                                    try:
+                                        with open(file_path, "r", encoding="utf-8") as f_in:
+                                            data_obj = json.load(f_in)
+                                        # 프로젝트 명은 카테고리 명칭으로 지정
+                                        proj_name = selected_upload_category
+                                        
+                                        supabase_client.table("motions").insert({
+                                            "filename": f_name,
+                                            "data": data_obj,
+                                            "project_name": proj_name
+                                        }).execute()
+                                        success_count += 1
+                                    except Exception as upload_err:
+                                        error_count += 1
+                                    progress_bar.progress(float(idx + 1) / len(files_to_upload))
+                                
+                                status_text.empty()
+                                progress_bar.empty()
+                                
+                                if success_count > 0:
+                                    st.success(f"'{selected_upload_category}' 카테고리의 모션 파일 {success_count}개 일괄 업로드 성공! ☁️")
+                                    st.balloons()
+                                if error_count > 0:
+                                    st.error(f"{error_count}개 파일 업로드 실패")
+
     with col_pb_right:
         st.markdown("### 📊 관절 분석 데이터 (Data View)")
         arduino_led_panel = st.container()
