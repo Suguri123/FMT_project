@@ -609,8 +609,8 @@ def send_saved_motion_to_arduino(data, port, playback_speed, status_box, progres
                 frame_image = build_skeleton_image(frame)
                 playback_viewer.image(
                     frame_image,
+                    width=280,
                     caption=f"{motion_name or '이름 없음'} · 아두이노 전송 동기화 시각화",
-                    use_container_width=True,
                 )
 
             if direction_commands is not None:
@@ -1456,7 +1456,7 @@ if play_clicked and selected_file and not webcam_on:
             frame_image = build_skeleton_image(frame_data)
             playback_viewer.image(
                 frame_image,
-                use_container_width=True,
+                width=280,
                 caption=f"{selected_file} · frame {frame_index + 1}/{len(data)}",
             )
             previous_t = current_t
@@ -1467,7 +1467,7 @@ elif selected_file and not webcam_on:
 
     if data:
         preview_image = build_skeleton_image(data[0])
-        playback_viewer.image(preview_image, use_container_width=True, caption=f"{selected_file} · preview")
+        playback_viewer.image(preview_image, width=280, caption=f"{selected_file} · preview")
 
 if webcam_on:
     new_motion_saved = False
