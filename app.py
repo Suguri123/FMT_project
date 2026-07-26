@@ -1306,6 +1306,8 @@ with tab2:
                                     motion_capture.set_physical_ai_model(seq_model_path, seq_ai_category)
                                     
                                     motion_capture.configure_arduino_realtime(False, arduino_port)
+                                    # OS가 시리얼 포트 핸들을 완전히 해제할 시간 대기
+                                    time.sleep(0.5)
                                     sequence_status = st.empty()
                                     sequence_progress = st.empty()
                                     try:

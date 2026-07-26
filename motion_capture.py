@@ -256,12 +256,27 @@ class MotionCaptureSession:
             raise RuntimeError('pyserial이 설치되어 있지 않습니다. pip install pyserial을 실행하세요.')
 
         if self._arduino is None or not self._arduino.is_open:
-            self._arduino = serial.Serial(
-                self._arduino_port,
-                ARDUINO_BAUD_RATE,
-                timeout=0.1,
-                write_timeout=1.0,
-            )
+            last_err = None
+            for attempt in range(3):
+                try:
+                    self._arduino = serial.Serial(
+                        self._arduino_port,
+                        ARDUINO_BAUD_RATE,
+                        timeout=0.1,
+                        write_timeout=1.0,
+                    )
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    # PermissionError(13)의 경우 OS가 포트를 닫는 도중일 수 있으므로 대기 후 재시도
+                    if 'PermissionError' in str(e) or '13' in str(e) or 'denied' in str(e).lower():
+                        time.sleep(0.4)
+                    else:
+                        raise e
+            if last_err is not None:
+                raise last_err
+                
             time.sleep(2)
             self._arduino_last_command = None
         return self._arduino
