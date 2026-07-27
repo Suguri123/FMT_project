@@ -19,7 +19,10 @@ from collections import Counter
 from urllib.parse import quote
 from supabase import create_client
 from streamlit_webrtc import webrtc_streamer
-import serial.tools.list_ports
+try:
+    import serial.tools.list_ports
+except ImportError:
+    serial = None
 
 import sys
 import importlib
@@ -918,7 +921,10 @@ with tab1:
         with st.container():
             # 사용 가능한 COM 포트 및 아두이노 오토 스캔
             try:
-                available_ports = list(serial.tools.list_ports.comports())
+                if serial is not None:
+                    available_ports = list(serial.tools.list_ports.comports())
+                else:
+                    available_ports = []
                 port_options = []
                 detected_arduino = None
                 
@@ -1251,7 +1257,10 @@ with tab2:
                                 st.write("선택한 모션 데이터의 시간 흐름대로 LED 신호를 포트로 전송합니다.")
                                 # 사용 가능한 COM 포트 및 아두이노 오토 스캔 (Tab 2)
                                 try:
-                                    available_ports = list(serial.tools.list_ports.comports())
+                                    if serial is not None:
+                                        available_ports = list(serial.tools.list_ports.comports())
+                                    else:
+                                        available_ports = []
                                     port_options = []
                                     detected_arduino = None
                                     
